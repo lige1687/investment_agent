@@ -34,6 +34,7 @@ __pycache__/
 # Local tools, generated downloads, and private captures
 .claude/
 .gstack/
+.superpowers/
 temp_download/
 screenshots/
 skills/.skills_store_lock.json
