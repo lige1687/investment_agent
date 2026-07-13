@@ -2,6 +2,9 @@ import { useState, useMemo } from 'react'
 import { Typography, Input, Select, Space, Card } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { marketApi } from '@/api/market'
+import { deriveDataState } from '@/api/adapters/market'
+import DataStatePanel from '@/components/common/DataStatePanel'
+import DemoDataBanner from '@/components/common/DemoDataBanner'
 import QuoteTable from './QuoteTable'
 import KlineChart from './KlineChart'
 import type { KlineData } from '@/types/market'
@@ -16,27 +19,32 @@ export default function MarketPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string>(DEFAULT_ETFS[0])
   const [period, setPeriod] = useState<string>('daily')
 
-  const { data: quotesData, isLoading } = useQuery({
+  const { data: quotesData, isLoading, refetch: refetchQuotes } = useQuery({
     queryKey: ['quotes', symbols],
     queryFn: async () => {
-      const resp = await marketApi.getQuotes(symbols)
-      return resp.data.quotes
+      return marketApi.getQuotes(symbols)
     },
     refetchInterval: 30_000, // Refresh every 30s
   })
 
-  const { data: klineData } = useQuery({
+  const { data: klineData, isLoading: klineLoading, refetch: refetchKline } = useQuery({
     queryKey: ['kline', selectedSymbol, period],
     queryFn: async () => {
-      const resp = await marketApi.getKline(selectedSymbol, period, 120)
-      return resp.data.klines
+      return marketApi.getKline(selectedSymbol, period, 120)
     },
     enabled: !!selectedSymbol,
     refetchInterval: 60_000,
   })
 
-  const quotes = useMemo(() => quotesData || [], [quotesData])
-  const klines = useMemo(() => klineData || [], [klineData])
+  const quotes = useMemo(() => quotesData?.data || [], [quotesData])
+  const klines = useMemo(() => klineData?.data.klines || [], [klineData])
+  const quoteState = isLoading
+    ? 'loading'
+    : quotesData ? deriveDataState(quotesData.meta) : 'unavailable'
+  const klineState = klineLoading
+    ? 'loading'
+    : klineData ? deriveDataState(klineData.meta) : 'unavailable'
+  const usesDemoData = quotesData?.meta.isMock || klineData?.meta.isMock
 
   const handleSearch = (value: string) => {
     const codes = value
@@ -51,6 +59,7 @@ export default function MarketPage() {
 
   return (
     <div>
+      {usesDemoData && <DemoDataBanner />}
       <Title level={4}>行情数据</Title>
 
       <Space style={{ marginBottom: 16 }}>
@@ -69,15 +78,27 @@ export default function MarketPage() {
       </Space>
 
       <Card title={`📊 ${selectedSymbol} K线图`} style={{ marginBottom: 16 }}>
-        <KlineChart data={klines as KlineData[]} height={420} />
+        <DataStatePanel
+          state={klineState}
+          meta={klineData?.meta}
+          onRetry={() => { refetchKline() }}
+        >
+          <KlineChart data={klines as KlineData[]} height={420} />
+        </DataStatePanel>
       </Card>
 
       <Card title="行情列表">
-        <QuoteTable
-          data={quotes}
-          loading={isLoading}
-          onRowClick={setSelectedSymbol}
-        />
+        <DataStatePanel
+          state={quoteState}
+          meta={quotesData?.meta}
+          onRetry={() => { refetchQuotes() }}
+        >
+          <QuoteTable
+            data={quotes}
+            loading={isLoading}
+            onRowClick={setSelectedSymbol}
+          />
+        </DataStatePanel>
       </Card>
     </div>
   )

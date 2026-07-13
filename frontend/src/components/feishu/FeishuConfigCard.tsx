@@ -8,13 +8,13 @@ const { Text } = Typography
 export default function FeishuConfigCard() {
   const [webhookUrl, setWebhookUrl] = useState('')
   const [testing, setTesting] = useState(false)
-  const [status, setStatus] = useState<{ configured: boolean } | null>(null)
+  const [status, setStatus] = useState<{ configured: boolean; webhook_hint?: string } | null>(null)
 
   const loadConfig = async () => {
     try {
       const resp = await apiClient.get('/feishu/config')
       setStatus(resp.data)
-      setWebhookUrl(resp.data.webhook_url || '')
+      setWebhookUrl('')
     } catch { /* ignore */ }
   }
 
@@ -62,12 +62,14 @@ export default function FeishuConfigCard() {
         <div>
           <Text strong style={{ display: 'block', marginBottom: 4 }}>Webhook URL</Text>
           <Input
-            placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxxxx"
+            placeholder={status?.configured ? '已配置，留空则不修改' : '请输入新的飞书 Webhook URL'}
             value={webhookUrl}
             onChange={(e) => setWebhookUrl(e.target.value)}
           />
           <Text type="secondary" style={{ fontSize: 11 }}>
-            飞书群 → 群设置 → 机器人 → 添加自定义机器人 → 复制 Webhook 地址
+            {status?.webhook_hint
+              ? `当前配置：${status.webhook_hint}`
+              : '飞书群 → 群设置 → 机器人 → 添加自定义机器人 → 复制 Webhook 地址'}
           </Text>
         </div>
 

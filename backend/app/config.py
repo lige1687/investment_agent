@@ -1,5 +1,7 @@
 """Application configuration via pydantic-settings."""
 from pathlib import Path
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,6 +64,10 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-20250514"
 
     ths_api_base_url: str = "https://api.10jqka.com.cn"
+
+    # Market data trust boundary. Live mode fails closed; generated data is
+    # available only when demo mode is selected explicitly.
+    market_data_mode: Literal["live", "demo"] = "live"
 
     # Feishu
     feishu_webhook_url: str = ""

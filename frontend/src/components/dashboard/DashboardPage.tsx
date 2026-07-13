@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import {
   Row, Col, Card, Statistic, Tag, Button, Modal, Checkbox,
-  Space, Typography, Spin, Empty, Tooltip, List, Progress,
+  Space, Typography, Empty, Tooltip, List, Progress,
 } from 'antd'
 import {
   PlusOutlined, SettingOutlined, ArrowUpOutlined,
@@ -9,9 +9,12 @@ import {
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { marketApi } from '@/api/market'
+import { deriveDataState } from '@/api/adapters/market'
+import DataStatePanel from '@/components/common/DataStatePanel'
+import DemoDataBanner from '@/components/common/DemoDataBanner'
 import {
   DEFAULT_INDICES, AVAILABLE_INDICES,
-  type IndexConfig, type IndexData, type DiagnosisData,
+  type IndexConfig, type IndexData,
 } from '@/types/market'
 
 const { Title, Text } = Typography
@@ -32,20 +35,26 @@ export default function DashboardPage() {
   const { data: indicesData, isLoading: indicesLoading, refetch: refetchIndices } = useQuery({
     queryKey: ['global-indices', enabledCodes],
     queryFn: async () => {
-      const resp = await marketApi.getIndices(enabledCodes)
-      return resp.data.indices
+      return marketApi.getIndices(enabledCodes)
     },
     refetchInterval: 60_000, // 1min refresh
   })
 
-  const { data: diagnosis, isLoading: diagLoading } = useQuery({
+  const { data: diagnosis, isLoading: diagLoading, refetch: refetchDiagnosis } = useQuery({
     queryKey: ['market-diagnosis'],
     queryFn: async () => {
-      const resp = await marketApi.getDiagnosis()
-      return resp.data
+      return marketApi.getDiagnosis()
     },
     refetchInterval: 300_000, // 5min refresh
   })
+
+  const indicesState = indicesLoading
+    ? 'loading'
+    : indicesData ? deriveDataState(indicesData.meta) : 'unavailable'
+  const diagnosisState = diagLoading
+    ? 'loading'
+    : diagnosis ? deriveDataState(diagnosis.meta) : 'unavailable'
+  const usesDemoData = indicesData?.meta.isMock || diagnosis?.meta.isMock
 
   // ── Handlers ──
   const saveIndices = useCallback((indices: IndexConfig[]) => {
@@ -85,6 +94,7 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {usesDemoData && <DemoDataBanner />}
       {/* ── Header ── */}
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
@@ -104,11 +114,13 @@ export default function DashboardPage() {
 
       {/* ── 🌍 Global Index Cards ── */}
       <Card size="small" style={{ marginBottom: 16 }}>
-        {indicesLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
-        ) : (
+        <DataStatePanel
+          state={indicesState}
+          meta={indicesData?.meta}
+          onRetry={() => { refetchIndices() }}
+        >
           <Row gutter={[12, 12]}>
-            {(indicesData || []).map((idx: IndexData) => (
+            {(indicesData?.data || []).map((idx: IndexData) => (
               <Col xs={12} sm={8} md={6} lg={4} key={idx.code}>
                 <div className="stat-card" style={{ background: '#fafafa', borderRadius: 8, padding: 10 }}>
                   <Text type="secondary" style={{ fontSize: 11 }}>{idx.name}</Text>
@@ -126,15 +138,18 @@ export default function DashboardPage() {
                 </div>
               </Col>
             ))}
-            {(!indicesData || indicesData.length === 0) && (
-              <Col span={24}><Empty description="暂无指数数据" /></Col>
-            )}
           </Row>
-        )}
+        </DataStatePanel>
       </Card>
 
       {/* ── 📊 大盘诊断 ── */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+      <DataStatePanel
+        state={diagnosisState}
+        meta={diagnosis?.meta}
+        onRetry={() => { refetchDiagnosis() }}
+      >
+        <div>
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         {/* 市场情绪 */}
         <Col xs={24} md={8}>
           <Card
@@ -143,7 +158,7 @@ export default function DashboardPage() {
             loading={diagLoading}
             extra={<Text type="secondary" style={{ fontSize: 11 }}>市场情绪分析 #120</Text>}
           >
-            {diagnosis?.sentiment ? (
+            {diagnosis?.data.sentiment ? (
               <div>
                 <div style={{ textAlign: 'center', marginBottom: 12 }}>
                   <Tooltip title="0=极度恐惧, 100=极度贪婪. 巴菲特: 别人恐惧我贪婪">
@@ -151,31 +166,31 @@ export default function DashboardPage() {
                       恐慌贪婪指数 <QuestionCircleOutlined />
                     </Text>
                   </Tooltip>
-                  <div style={{ fontSize: 36, fontWeight: 700, color: sentimentColor(diagnosis.sentiment.fearGreedIndex) }}>
-                    {diagnosis.sentiment.fearGreedIndex ?? '--'}
+                  <div style={{ fontSize: 36, fontWeight: 700, color: sentimentColor(diagnosis.data.sentiment.fearGreedIndex) }}>
+                    {diagnosis.data.sentiment.fearGreedIndex ?? '--'}
                   </div>
-                  <Tag color={sentimentColor(diagnosis.sentiment.fearGreedIndex)}>
-                    {diagnosis.sentiment.fearGreedLabel || '--'}
+                  <Tag color={sentimentColor(diagnosis.data.sentiment.fearGreedIndex)}>
+                    {diagnosis.data.sentiment.fearGreedLabel || '--'}
                   </Tag>
                 </div>
                 <Space direction="vertical" size={4} style={{ width: '100%', fontSize: 12 }}>
                   <Row justify="space-between">
                     <Text type="secondary">融资余额</Text>
-                    <Text>{diagnosis.sentiment.marginBalance?.toFixed(0) ?? '--'} 亿</Text>
+                    <Text>{diagnosis.data.sentiment.marginBalance?.toFixed(0) ?? '--'} 亿</Text>
                   </Row>
                   <Row justify="space-between">
                     <Text type="secondary">融券余额</Text>
-                    <Text>{diagnosis.sentiment.shortBalance?.toFixed(0) ?? '--'} 亿</Text>
+                    <Text>{diagnosis.data.sentiment.shortBalance?.toFixed(0) ?? '--'} 亿</Text>
                   </Row>
                   <Row justify="space-between">
                     <Text type="secondary">Put/Call比率</Text>
-                    <Text>{diagnosis.sentiment.putCallRatio?.toFixed(2) ?? '--'}</Text>
+                    <Text>{diagnosis.data.sentiment.putCallRatio?.toFixed(2) ?? '--'}</Text>
                   </Row>
                   <Row justify="space-between">
                     <Text type="secondary">北向资金</Text>
-                    <Text style={{ color: (diagnosis.sentiment.northBoundFlow ?? 0) > 0 ? '#cf1322' : '#3f8600' }}>
-                      {diagnosis.sentiment.northBoundFlow != null
-                        ? `${diagnosis.sentiment.northBoundFlow > 0 ? '+' : ''}${diagnosis.sentiment.northBoundFlow.toFixed(1)}亿`
+                    <Text style={{ color: (diagnosis.data.sentiment.northBoundFlow ?? 0) > 0 ? '#cf1322' : '#3f8600' }}>
+                      {diagnosis.data.sentiment.northBoundFlow != null
+                        ? `${diagnosis.data.sentiment.northBoundFlow > 0 ? '+' : ''}${diagnosis.data.sentiment.northBoundFlow.toFixed(1)}亿`
                         : '--'}
                     </Text>
                   </Row>
@@ -195,10 +210,10 @@ export default function DashboardPage() {
             loading={diagLoading}
             extra={<Text type="secondary" style={{ fontSize: 11 }}>行业轮动 #119</Text>}
           >
-            {diagnosis?.topCapitalInflow?.length ? (
+            {diagnosis?.data.topCapitalInflow?.length ? (
               <List
                 size="small"
-                dataSource={diagnosis.topCapitalInflow}
+                dataSource={diagnosis.data.topCapitalInflow}
                 renderItem={(item) => (
                   <List.Item style={{ padding: '4px 0' }}>
                     <Row justify="space-between" style={{ width: '100%' }} align="middle">
@@ -234,10 +249,10 @@ export default function DashboardPage() {
             loading={diagLoading}
             extra={<Text type="secondary" style={{ fontSize: 11 }}>行业轮动监控 #187</Text>}
           >
-            {diagnosis?.sectorRotation?.length ? (
+            {diagnosis?.data.sectorRotation?.length ? (
               <List
                 size="small"
-                dataSource={diagnosis.sectorRotation.slice(0, 8)}
+                dataSource={diagnosis.data.sectorRotation.slice(0, 8)}
                 renderItem={(item) => (
                   <List.Item style={{ padding: '3px 0' }}>
                     <Row justify="space-between" style={{ width: '100%' }} align="middle">
@@ -268,19 +283,19 @@ export default function DashboardPage() {
       </Row>
 
       {/* ── Summary + North-bound ── */}
-      {diagnosis?.summary && (
+      {diagnosis?.data.summary && (
         <Card size="small" style={{ marginBottom: 16, background: '#f6f8fa' }}>
           <Row gutter={16}>
             <Col xs={24} md={16}>
               <Text strong>📋 AI 诊断总结：</Text>
-              <Text>{diagnosis.summary}</Text>
+              <Text>{diagnosis.data.summary}</Text>
             </Col>
             <Col xs={24} md={8}>
-              {(diagnosis.northBoundSectors || []).length > 0 && (
+              {(diagnosis.data.northBoundSectors || []).length > 0 && (
                 <>
                   <Text strong style={{ fontSize: 12 }}>北向加仓板块：</Text>
                   <Space size={4} wrap>
-                    {diagnosis.northBoundSectors.map((s) => (
+                    {diagnosis.data.northBoundSectors.map((s) => (
                       <Tag key={s.sectorCode} color="blue" style={{ fontSize: 11 }}>
                         {s.sectorName} +{s.netFlow.toFixed(1)}亿
                       </Tag>
@@ -292,6 +307,8 @@ export default function DashboardPage() {
           </Row>
         </Card>
       )}
+        </div>
+      </DataStatePanel>
 
       {/* ── 预警 + 信号 (Placeholder) ── */}
       <Row gutter={[16, 16]}>

@@ -11,6 +11,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { yangjibaoApi } from '@/api/yangjibao'
 import FeishuConfigCard from '@/components/feishu/FeishuConfigCard'
 import type { YangjibaoPortfolio, SyncResult } from '@/types/yangjibao'
+import { formatNumber } from '@/utils/format'
 
 const { Title, Text } = Typography
 
@@ -97,7 +98,7 @@ export default function SettingsPage() {
     onSuccess: (resp) => {
       const data: SyncResult = resp.data
       if (data.success) {
-        message.success(`同步成功！${data.positionsCount} 个持仓, ${data.totalValue > 0 ? `总市值 ¥${data.totalValue.toFixed(0)}` : ''}`)
+        message.success(`同步成功！${data.positionsCount} 个持仓, ${data.totalValue > 0 ? `总市值 ¥${formatNumber(data.totalValue, 0)}` : ''}`)
         refetchPortfolio()
       } else if (data.error === 'not_authenticated') {
         message.warning('未连接养基宝，请先扫码登录')
@@ -237,11 +238,13 @@ export default function SettingsPage() {
                         </Space>
                       }>
                         <Space split={<Text type="secondary">|</Text>}>
-                          <Text>份额 {pos.shares.toFixed(2)}</Text>
-                          <Text>成本 ¥{pos.avgCost.toFixed(3)}</Text>
-                          <Text>现价 ¥{(pos.currentPrice || 0).toFixed(3)}</Text>
+                          <Text>份额 {formatNumber(pos.shares, 2)}</Text>
+                          <Text>成本 ¥{formatNumber(pos.avgCost, 3)}</Text>
+                          <Text>现价 ¥{formatNumber(pos.currentPrice, 3)}</Text>
                           <Text strong style={{ color: (pos.unrealizedPnl || 0) >= 0 ? '#cf1322' : '#3f8600' }}>
-                            {pos.unrealizedPnlPct != null ? `${pos.unrealizedPnlPct >= 0 ? '+' : ''}${pos.unrealizedPnlPct.toFixed(2)}%` : '--'}
+                            {Number.isFinite(pos.unrealizedPnlPct)
+                              ? `${(pos.unrealizedPnlPct ?? 0) >= 0 ? '+' : ''}${formatNumber(pos.unrealizedPnlPct, 2)}%`
+                              : '--'}
                           </Text>
                         </Space>
                       </Descriptions.Item>

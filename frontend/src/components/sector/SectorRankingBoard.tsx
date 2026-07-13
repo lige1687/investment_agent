@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
-  Card, Table, Tag, Row, Col, Space, Button, Drawer, Spin, Empty,
+  Card, Table, Tag, Row, Col, Space, Button, Drawer, Empty,
   Typography, Progress, Tooltip, Segmented, Badge, Statistic,
   Divider,
 } from 'antd'
@@ -10,6 +10,9 @@ import {
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { marketApi } from '@/api/market'
+import { deriveDataState } from '@/api/adapters/market'
+import DataStatePanel from '@/components/common/DataStatePanel'
+import DemoDataBanner from '@/components/common/DemoDataBanner'
 import type { SectorRankingItem } from '@/types/market'
 
 const { Title, Text } = Typography
@@ -50,7 +53,7 @@ function SectorDetailDrawer({ sector, visible, onClose }: SectorDetailDrawerProp
             <Col span={12}>
               <Statistic
                 title="综合评分"
-                value={sector.base_score}
+                value={sector.baseScore}
                 precision={2}
                 suffix="/10"
                 valueStyle={{ fontSize: 28, fontWeight: 700 }}
@@ -75,11 +78,11 @@ function SectorDetailDrawer({ sector, visible, onClose }: SectorDetailDrawerProp
             <Col span={12}>
               <Statistic
                 title="涨跌幅"
-                value={sector.change_pct}
+                value={sector.changePct}
                 precision={2}
                 suffix="%"
                 valueStyle={{
-                  color: sector.change_pct > 0 ? '#cf1322' : sector.change_pct < 0 ? '#3f8600' : '#666',
+                  color: sector.changePct > 0 ? '#cf1322' : sector.changePct < 0 ? '#3f8600' : '#666',
                   fontSize: 20,
                 }}
               />
@@ -87,11 +90,11 @@ function SectorDetailDrawer({ sector, visible, onClose }: SectorDetailDrawerProp
             <Col span={12}>
               <Statistic
                 title="主力净流入"
-                value={sector.flow_value}
+                value={sector.flowValue}
                 precision={1}
                 suffix="亿"
                 valueStyle={{
-                  color: sector.flow_value > 0 ? '#cf1322' : sector.flow_value < 0 ? '#3f8600' : '#666',
+                  color: sector.flowValue > 0 ? '#cf1322' : sector.flowValue < 0 ? '#3f8600' : '#666',
                   fontSize: 20,
                 }}
               />
@@ -218,19 +221,21 @@ export default function SectorRankingBoard() {
   const [drawerVisible, setDrawerVisible] = useState(false)
 
   // 获取排行数据
-  const { data: rankingData, isLoading } = useQuery({
+  const { data: rankingData, isLoading, refetch } = useQuery({
     queryKey: ['sector-rankings'],
     queryFn: async () => {
-      const resp = await marketApi.getSectorRankings()
-      return resp.data
+      return marketApi.getSectorRankings()
     },
     refetchInterval: 60_000, // 1分钟刷新
   })
+  const rankingState = isLoading
+    ? 'loading'
+    : rankingData ? deriveDataState(rankingData.meta) : 'unavailable'
 
   // 过滤和排序
   const displayData = useMemo(() => {
-    if (!rankingData?.all_rankings) return []
-    let filtered = rankingData.all_rankings
+    if (!rankingData?.data.allRankings) return []
+    let filtered = rankingData.data.allRankings
 
     // 按信号过滤
     if (filterSignal !== 'all') {
@@ -240,11 +245,11 @@ export default function SectorRankingBoard() {
     // 排序
     const sorted = [...filtered].sort((a, b) => {
       if (sortBy === 'score') {
-        return b.base_score - a.base_score
+        return b.baseScore - a.baseScore
       } else if (sortBy === 'change') {
-        return b.change_pct - a.change_pct
+        return b.changePct - a.changePct
       } else { // flow
-        return b.flow_value - a.flow_value
+        return b.flowValue - a.flowValue
       }
     })
 
@@ -267,9 +272,9 @@ export default function SectorRankingBoard() {
 
   // 统计数据
   const statsData = useMemo(() => ({
-    strong: rankingData?.strong_signals?.length ?? 0,
-    watch: rankingData?.watch_signals?.length ?? 0,
-    weak: rankingData?.weak_signals?.length ?? 0,
+    strong: rankingData?.data.strongSignals?.length ?? 0,
+    watch: rankingData?.data.watchSignals?.length ?? 0,
+    weak: rankingData?.data.weakSignals?.length ?? 0,
   }), [rankingData])
 
   const columns = [
@@ -288,15 +293,15 @@ export default function SectorRankingBoard() {
       render: (_: any, record: SectorRankingItem) => (
         <div>
           <div style={{ fontWeight: 600, fontSize: 13 }}>{record.name}</div>
-          <div style={{ fontSize: 11, color: '#999' }}>{record.matched_sector}</div>
+          <div style={{ fontSize: 11, color: '#999' }}>{record.matchedSector}</div>
         </div>
       ),
     },
     {
       title: '评分',
-      dataIndex: 'base_score',
+      dataIndex: 'baseScore',
       width: 100,
-      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.base_score - b.base_score,
+      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.baseScore - b.baseScore,
       render: (score: number) => (
         <div style={{ textAlign: 'center' }}>
           <div style={{
@@ -317,9 +322,9 @@ export default function SectorRankingBoard() {
     },
     {
       title: '涨跌',
-      dataIndex: 'change_pct',
+      dataIndex: 'changePct',
       width: 80,
-      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.change_pct - b.change_pct,
+      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.changePct - b.changePct,
       render: (pct: number) => (
         <Text style={{
           color: pct > 0 ? '#cf1322' : pct < 0 ? '#3f8600' : '#666',
@@ -334,9 +339,9 @@ export default function SectorRankingBoard() {
     },
     {
       title: '资金',
-      dataIndex: 'flow_value',
+      dataIndex: 'flowValue',
       width: 100,
-      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.flow_value - b.flow_value,
+      sorter: (a: SectorRankingItem, b: SectorRankingItem) => a.flowValue - b.flowValue,
       render: (flow: number) => (
         <Text style={{
           color: flow > 0 ? '#cf1322' : flow < 0 ? '#3f8600' : '#666',
@@ -386,6 +391,7 @@ export default function SectorRankingBoard() {
 
   return (
     <div>
+      {rankingData?.meta.isMock && <DemoDataBanner />}
       {/* 页面标题 */}
       <Row justify="space-between" align="middle" style={{ marginBottom: 20 }}>
         <Col>
@@ -393,13 +399,19 @@ export default function SectorRankingBoard() {
         </Col>
         <Col>
           <Space>
-            <Button icon={<ReloadOutlined />} size="small" onClick={() => window.location.reload()}>
+            <Button icon={<ReloadOutlined />} size="small" onClick={() => { refetch() }}>
               刷新
             </Button>
           </Space>
         </Col>
       </Row>
 
+      <DataStatePanel
+        state={rankingState}
+        meta={rankingData?.meta}
+        onRetry={() => { refetch() }}
+      >
+      <div>
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
@@ -469,21 +481,16 @@ export default function SectorRankingBoard() {
       {/* 数据表 */}
       <Card
         size="small"
-        loading={isLoading}
         extra={
           rankingData && (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              共 {rankingData.total_sectors} 个板块 • 更新于 {new Date(rankingData.timestamp).toLocaleTimeString()}
+              共 {rankingData.data.totalSectors} 个板块 • 更新于 {new Date(rankingData.data.timestamp).toLocaleTimeString()}
             </Text>
           )
         }
       >
-        {isLoading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin />
-          </div>
-        ) : displayData.length === 0 ? (
-          <Empty description="暂无数据" style={{ padding: 40 }} />
+        {displayData.length === 0 ? (
+          <Empty description="当前筛选条件下无数据" style={{ padding: 40 }} />
         ) : (
           <Table
             dataSource={displayData}
@@ -502,6 +509,8 @@ export default function SectorRankingBoard() {
           />
         )}
       </Card>
+      </div>
+      </DataStatePanel>
 
       {/* 右侧详情抽屉 */}
       <SectorDetailDrawer

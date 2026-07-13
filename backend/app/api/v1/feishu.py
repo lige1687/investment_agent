@@ -1,4 +1,6 @@
 """Feishu bot configuration API."""
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +26,19 @@ class DevAskRequest(BaseModel):
     use_skill: bool = True
 
 
+def mask_webhook_url(value: str) -> str:
+    """Return a non-reversible hint suitable for API responses and UI copy."""
+
+    value = value.strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    host = parsed.netloc or "configured"
+    suffix = value[-4:] if len(value) >= 4 else "****"
+    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
+    return f"{scheme}://{host}/****{suffix}"
+
+
 def should_route_to_sector_detail(message: str) -> bool:
     text = message.lower()
     sector_words = ["半导体", "芯片", "通信", "光模块", "有色", "电池", "消费", "港股", "纳指", "美股"]
@@ -41,7 +56,9 @@ async def get_config(db: AsyncSession = Depends(get_db)):
 
     return {
         "configured": feishu_bot.configured,
-        "webhook_url": config.webhook_url if config else settings.feishu_webhook_url,
+        "webhook_hint": mask_webhook_url(
+            config.webhook_url if config else settings.feishu_webhook_url
+        ),
         "notify_market_open": config.notify_market_open if config else True,
         "notify_market_close": config.notify_market_close if config else True,
         "notify_alerts": config.notify_alerts if config else True,
@@ -53,8 +70,18 @@ async def get_config(db: AsyncSession = Depends(get_db)):
 @router.put("/config")
 async def update_config(req: FeishuConfigUpdate, db: AsyncSession = Depends(get_db)):
     """Update Feishu bot configuration."""
+    from sqlalchemy import select
+
+    stmt = select(FeishuConfig).order_by(FeishuConfig.id.desc()).limit(1)
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+    requested_webhook = req.webhook_url.strip()
+    effective_webhook = requested_webhook or (
+        existing.webhook_url if existing else settings.feishu_webhook_url
+    )
+
     config = FeishuConfig(
-        webhook_url=req.webhook_url,
+        webhook_url=effective_webhook,
         notify_market_open=req.notify_market_open,
         notify_market_close=req.notify_market_close,
         notify_alerts=req.notify_alerts,
@@ -66,7 +93,7 @@ async def update_config(req: FeishuConfigUpdate, db: AsyncSession = Depends(get_
 
     # Update global bot instance
     global feishu_bot
-    feishu_bot._webhook = req.webhook_url.strip()
+    feishu_bot._webhook = effective_webhook
 
     return {"ok": True, "configured": feishu_bot.configured}
 

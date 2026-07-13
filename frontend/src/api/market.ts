@@ -1,28 +1,47 @@
 import apiClient from './client'
-import type { QuoteData, KlineData, SectorData, IndexData, DiagnosisData, SectorRankingResponse } from '@/types/market'
+import {
+  adaptDiagnosisResponse,
+  adaptHeatmapResponse,
+  adaptIndicesResponse,
+  adaptKlineResponse,
+  adaptQuotesResponse,
+  adaptSectorRankingResponse,
+} from './adapters/market'
 
 export const marketApi = {
-  getQuotes: (symbols: string[]) =>
-    apiClient.get<{ quotes: QuoteData[] }>('/market/quotes', {
+  getQuotes: async (symbols: string[]) => {
+    const response = await apiClient.get('/market/quotes', {
       params: { symbols: symbols.join(',') }
-    }),
+    })
+    return adaptQuotesResponse(response.data)
+  },
 
-  getKline: (symbol: string, period = 'daily', count = 120) =>
-    apiClient.get<{ symbol: string; period: string; klines: KlineData[] }>(
+  getKline: async (symbol: string, period = 'daily', count = 120) => {
+    const response = await apiClient.get(
       '/market/kline', { params: { symbol, period, count } }
-    ),
+    )
+    return adaptKlineResponse(response.data)
+  },
 
-  getHeatmap: () =>
-    apiClient.get<{ sectors: SectorData[] }>('/market/heatmap'),
+  getHeatmap: async () => {
+    const response = await apiClient.get('/market/heatmap')
+    return adaptHeatmapResponse(response.data)
+  },
 
-  getIndices: (codes?: string[]) =>
-    apiClient.get<{ indices: IndexData[] }>('/market/indices', {
+  getIndices: async (codes?: string[]) => {
+    const response = await apiClient.get('/market/indices', {
       params: codes ? { codes: codes.join(',') } : {}
-    }),
+    })
+    return adaptIndicesResponse(response.data)
+  },
 
-  getDiagnosis: () =>
-    apiClient.get<DiagnosisData>('/market/diagnosis'),
+  getDiagnosis: async () => {
+    const response = await apiClient.get('/market/diagnosis')
+    return adaptDiagnosisResponse(response.data)
+  },
 
-  getSectorRankings: () =>
-    apiClient.get<SectorRankingResponse>('/market/sector/rankings'),
+  getSectorRankings: async () => {
+    const response = await apiClient.get('/market/sector/rankings')
+    return adaptSectorRankingResponse(response.data)
+  },
 }

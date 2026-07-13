@@ -11,6 +11,13 @@ from app.schemas.market import (
     SectorRankingItem, SectorRankingResponse, SectorScoreDimension,
 )
 from app.services.market_data_provider import MarketDataProvider
+from app.services.market_data_trust import (
+    market_data_meta,
+    validate_index_rows,
+    validate_quote_rows,
+    validate_sector_rows,
+)
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +38,12 @@ class MarketService:
             params={"symbols": symbols},
             cache_ttl=30,
         )
+        source = result.strategy_used or "skill:market_quote"
         if result.success and isinstance(result.data, dict):
-            quotes_data = result.data.get("quotes", result.data.get("data", []))
-            if isinstance(quotes_data, list):
-                return QuotesListResponse(quotes=[
+            raw_quotes = result.data.get("quotes", result.data.get("data", []))
+            if isinstance(raw_quotes, list):
+                quotes_data, rejected = validate_quote_rows(raw_quotes)
+                quotes = [
                     QuoteResponse(
                         symbol=q.get("symbol", q.get("code", "")),
                         name=q.get("name", ""),
@@ -50,10 +59,26 @@ class MarketService:
                         timestamp=q.get("timestamp", datetime.now().isoformat()),
                     )
                     for q in quotes_data
-                ])
+                ]
+                status = "invalid" if rejected else "ok" if quotes else "empty"
+                message = (
+                    "部分行情数据未通过合理性校验，本次不可用于交易决策"
+                    if rejected
+                    else "数据源正常，当前没有行情数据" if not quotes else None
+                )
+                return QuotesListResponse(
+                    quotes=quotes,
+                    meta=market_data_meta(source=source, status=status, message=message),
+                )
 
-        # Return empty if data unavailable
-        return QuotesListResponse(quotes=[])
+        return QuotesListResponse(
+            quotes=[],
+            meta=market_data_meta(
+                source=source,
+                status="unavailable",
+                message="行情数据源当前不可用",
+            ),
+        )
 
     # ── K-line ──
 
@@ -64,7 +89,12 @@ class MarketService:
         # Try SQLite cache first
         cached = await self._get_kline_from_cache(symbol, period, count)
         if cached and len(cached) >= count:
-            return KlineResponse(symbol=symbol, period=period, klines=cached)
+            return KlineResponse(
+                symbol=symbol,
+                period=period,
+                klines=cached,
+                meta=market_data_meta(source="local/sqlite", status="ok"),
+            )
 
         # Fetch via SkillBridge
         result = await bridge.invoke_simple(
@@ -75,9 +105,27 @@ class MarketService:
         if result.success:
             klines = self._parse_kline_data(result.data, count)
             await self._cache_kline_data(symbol, period, klines)
-            return KlineResponse(symbol=symbol, period=period, klines=klines)
+            return KlineResponse(
+                symbol=symbol,
+                period=period,
+                klines=klines,
+                meta=market_data_meta(
+                    source=result.strategy_used or "skill:kline_data",
+                    status="ok" if klines else "empty",
+                    message=None if klines else "数据源正常，当前没有K线数据",
+                ),
+            )
 
-        return KlineResponse(symbol=symbol, period=period, klines=[])
+        return KlineResponse(
+            symbol=symbol,
+            period=period,
+            klines=[],
+            meta=market_data_meta(
+                source=result.strategy_used or "skill:kline_data",
+                status="unavailable",
+                message="K线数据源当前不可用",
+            ),
+        )
 
     async def _get_kline_from_cache(
         self, symbol: str, period: str, count: int
@@ -146,25 +194,10 @@ class MarketService:
     # ── Indices ──
 
     async def get_indices(self) -> IndicesListResponse:
-        """Get major index quotes."""
-        result = await bridge.invoke_simple("index_quote", cache_ttl=30)
-        indices = []
-        idx_map = {
-            "000001": "上证指数", "000300": "沪深300",
-            "399006": "创业板指", "000688": "科创50",
-            "399001": "深证成指", "000016": "上证50",
-        }
-        if result.success and isinstance(result.data, list):
-            for item in result.data:
-                code = item.get("code", item.get("symbol", ""))
-                indices.append(IndexResponse(
-                    code=code,
-                    name=idx_map.get(code, item.get("name", "")),
-                    price=item.get("price", item.get("close", 0)),
-                    change=item.get("change", 0),
-                    change_pct=item.get("change_pct", item.get("changePct", 0)),
-                ))
-        return IndicesListResponse(indices=indices)
+        """Get major A-share indices through the shared trust boundary."""
+        return await self.get_global_indices(
+            ["000001", "000300", "399006", "000688", "399001"]
+        )
 
     # ── Sectors / Heatmap ──
 
@@ -179,12 +212,25 @@ class MarketService:
             cache_ttl=300,
         )
 
-        # Fallback to provider when bridge returns empty
-        data = None
-        if result.success and isinstance(result.data, list) and result.data:
-            data = result.data
+        source = result.strategy_used or "skill:sector_data"
+        is_mock = False
+        if result.success and isinstance(result.data, list):
+            raw_data = result.data
+        elif settings.market_data_mode == "demo":
+            raw_data = self._data_provider.get_heatmap_sectors()
+            source = "demo/mock"
+            is_mock = True
         else:
-            data = self._data_provider.get_heatmap_sectors()
+            return HeatmapResponse(
+                sectors=[],
+                meta=market_data_meta(
+                    source=source,
+                    status="unavailable",
+                    message="板块数据源当前不可用",
+                ),
+            )
+
+        data, rejected = validate_sector_rows(raw_data)
 
         sectors = []
         for item in data:
@@ -199,7 +245,21 @@ class MarketService:
                 rank=item.get("rank"),
                 rank_change=item.get("rank_change", item.get("rankChange")),
             ))
-        return HeatmapResponse(sectors=sectors)
+        status = "invalid" if rejected else "ok" if sectors else "empty"
+        message = (
+            "部分板块数据未通过合理性校验，本次不可用于交易决策"
+            if rejected
+            else "数据源正常，当前没有板块数据" if not sectors else None
+        )
+        return HeatmapResponse(
+            sectors=sectors,
+            meta=market_data_meta(
+                source=source,
+                status=status,
+                message=message,
+                is_mock=is_mock,
+            ),
+        )
 
     # ── Market Diagnosis ──
 
@@ -234,12 +294,25 @@ class MarketService:
             cache_ttl=30,
         )
 
-        # Fallback to provider when bridge returns empty
-        data = None
-        if result.success and isinstance(result.data, list) and result.data:
-            data = result.data
+        source = result.strategy_used or "skill:index_quote"
+        is_mock = False
+        if result.success and isinstance(result.data, list):
+            raw_data = result.data
+        elif settings.market_data_mode == "demo":
+            raw_data = self._data_provider.get_global_indices(codes)
+            source = "demo/mock"
+            is_mock = True
         else:
-            data = self._data_provider.get_global_indices(codes)
+            return IndicesListResponse(
+                indices=[],
+                meta=market_data_meta(
+                    source=source,
+                    status="unavailable",
+                    message="指数数据源当前不可用",
+                ),
+            )
+
+        data, rejected = validate_index_rows(raw_data)
 
         idx_map = {i["code"]: i for i in self.GLOBAL_INDICES}
         indices = []
@@ -255,7 +328,25 @@ class MarketService:
                 change_pct=item.get("change_pct", item.get("changePct", 0)),
             ))
 
-        return IndicesListResponse(indices=indices)
+        if rejected:
+            status = "invalid"
+            message = "部分指数数据未通过合理性校验，本次不可用于交易决策"
+        elif not data:
+            status = "empty"
+            message = "数据源正常，当前没有指数数据"
+        else:
+            status = "ok"
+            message = None
+
+        return IndicesListResponse(
+            indices=indices,
+            meta=market_data_meta(
+                source=source,
+                status=status,
+                message=message,
+                is_mock=is_mock,
+            ),
+        )
 
     async def get_diagnosis(self) -> "DiagnosisResponse":
         """Get comprehensive market diagnosis.
@@ -269,6 +360,9 @@ class MarketService:
             DiagnosisResponse, SentimentData,
             CapitalFlowItem, SectorRotationItem,
         )
+
+        self._diagnosis_failed_sources: list[str] = []
+        self._diagnosis_used_mock = False
 
         # Fetch from multiple skills in parallel where possible
         sentiment = await self._fetch_sentiment()
@@ -288,13 +382,33 @@ class MarketService:
             if leading:
                 summary_parts.append(f"领涨板块: {', '.join(leading)}")
 
+        has_data = bool(sentiment or top_inflow or top_outflow or rotation or north_sectors)
+        if self._diagnosis_used_mock:
+            source = "demo/mock"
+            status = "ok" if has_data else "empty"
+            message = None if has_data else "演示数据当前为空"
+        elif self._diagnosis_failed_sources:
+            source = "market-diagnosis-skills"
+            status = "unavailable"
+            message = "市场诊断数据源不完整，本次不可用于交易决策"
+        else:
+            source = "market-diagnosis-skills"
+            status = "ok" if has_data else "empty"
+            message = None if has_data else "数据源正常，当前没有市场诊断数据"
+
         return DiagnosisResponse(
             sentiment=sentiment,
             top_capital_inflow=top_inflow,
             top_capital_outflow=top_outflow,
             sector_rotation=rotation,
             north_bound_sectors=north_sectors,
-            summary="；".join(summary_parts) if summary_parts else "数据获取中...",
+            summary="；".join(summary_parts) if summary_parts else message or "当前没有市场诊断数据",
+            meta=market_data_meta(
+                source=source,
+                status=status,
+                message=message,
+                is_mock=self._diagnosis_used_mock,
+            ),
         )
 
     async def _fetch_sentiment(self) -> "SentimentData | None":
@@ -308,9 +422,14 @@ class MarketService:
             cache_ttl=300,
         )
 
-        data = (result.data
-                if result.success and isinstance(result.data, dict)
-                else self._data_provider.get_sentiment())
+        if result.success and isinstance(result.data, dict):
+            data = result.data
+        elif settings.market_data_mode == "demo":
+            data = self._data_provider.get_sentiment()
+            self._diagnosis_used_mock = True
+        else:
+            self._diagnosis_failed_sources.append("sentiment_analysis")
+            data = None
 
         if isinstance(data, dict):
             return SentimentData(
@@ -337,9 +456,14 @@ class MarketService:
             cache_ttl=300,
         )
 
-        data = (result.data
-                if result.success and isinstance(result.data, dict)
-                else self._data_provider.get_capital_flow())
+        if result.success and isinstance(result.data, dict):
+            data = result.data
+        elif settings.market_data_mode == "demo":
+            data = self._data_provider.get_capital_flow()
+            self._diagnosis_used_mock = True
+        else:
+            self._diagnosis_failed_sources.append("sector_rotation_analysis:capital_flow")
+            data = None
 
         inflow, outflow = [], []
         if isinstance(data, dict):
@@ -372,9 +496,14 @@ class MarketService:
             cache_ttl=600,
         )
 
-        data = (result.data
-                if result.success and isinstance(result.data, list) and result.data
-                else self._data_provider.get_sector_rotation())
+        if result.success and isinstance(result.data, list):
+            data = result.data
+        elif settings.market_data_mode == "demo":
+            data = self._data_provider.get_sector_rotation()
+            self._diagnosis_used_mock = True
+        else:
+            self._diagnosis_failed_sources.append("sector_rotation_analysis:rotation")
+            data = None
 
         items = []
         if isinstance(data, list):
@@ -402,9 +531,14 @@ class MarketService:
             cache_ttl=300,
         )
 
-        data = (result.data
-                if result.success and isinstance(result.data, list) and result.data
-                else self._data_provider.get_north_bound_sectors())
+        if result.success and isinstance(result.data, list):
+            data = result.data
+        elif settings.market_data_mode == "demo":
+            data = self._data_provider.get_north_bound_sectors()
+            self._diagnosis_used_mock = True
+        else:
+            self._diagnosis_failed_sources.append("north_bound_flow")
+            data = None
 
         items = []
         if isinstance(data, list):
@@ -433,9 +567,27 @@ class MarketService:
         skill_rows = await self._fetch_sectors_from_skill()
         if skill_rows:
             sectors_to_score = skill_rows
+            source = "skill:sector_select"
+            is_mock = False
             logger.info(f"Sector rankings: using skill data ({len(skill_rows)} sectors)")
+        elif settings.market_data_mode != "demo":
+            return SectorRankingResponse(
+                timestamp=datetime.now().isoformat(),
+                total_sectors=0,
+                strong_signals=[],
+                watch_signals=[],
+                weak_signals=[],
+                all_rankings=[],
+                meta=market_data_meta(
+                    source="skill:sector_select",
+                    status="unavailable",
+                    message="板块排行数据源当前不可用",
+                ),
+            )
         else:
             mock_rows = self._get_mock_sector_data()
+            source = "demo/mock"
+            is_mock = True
             sectors_to_score = [
                 {
                     "code": r.get("source_code", ""),
@@ -499,6 +651,12 @@ class MarketService:
             watch_signals=watch_items[:10],
             weak_signals=weak_items[:5],
             all_rankings=all_ranking_items,
+            meta=market_data_meta(
+                source=source,
+                status="ok" if all_ranking_items else "empty",
+                message=None if all_ranking_items else "数据源正常，当前没有板块排行数据",
+                is_mock=is_mock,
+            ),
         )
 
     async def _fetch_sectors_from_skill(self) -> list[dict]:

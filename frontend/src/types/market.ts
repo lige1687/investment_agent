@@ -74,8 +74,8 @@ export interface SectorRotationItem {
   momentumScore: number
   heatLevel: number              // 1-5
   trend: string                  // "leading"/"improving"/"weakening"/"lagging"
-  change_1w?: number
-  change_1m?: number
+  change1w?: number
+  change1m?: number
   capitalFlow5d?: number
 }
 
@@ -134,13 +134,13 @@ export interface SectorRankingItem {
   rank: number
   code: string
   name: string
-  matched_sector: string  // 实际匹配的板块名称
-  change_pct: number  // 涨跌幅%
-  flow_value: number  // 主力净流入 (亿元)
+  matchedSector: string  // 实际匹配的板块名称
+  changePct: number  // 涨跌幅%
+  flowValue: number  // 主力净流入 (亿元)
   turnover: number  // 成交额 (亿元)
 
   // Comprehensive scoring
-  base_score: number  // 综合评分 (0-10)
+  baseScore: number  // 综合评分 (0-10)
   breakdown: SectorScoreDimension  // 维度分数
 
   // Signal & confidence
@@ -153,14 +153,14 @@ export interface SectorRankingItem {
   opportunity: string  // 机会评价
 
   // Related holdings (可选)
-  related_holdings?: string[]  // 相关持仓基金代码
+  relatedHoldings?: string[]  // 相关持仓基金代码
 }
 
 export interface SectorRankingResponse {
   timestamp: string
-  total_sectors: number
-  strong_signals: SectorRankingItem[]  // 信号强的 TOP
-  watch_signals: SectorRankingItem[]   // 观察信号的
-  weak_signals: SectorRankingItem[]    // 弱势信号的
-  all_rankings: SectorRankingItem[]    // 全部排序
+  totalSectors: number
+  strongSignals: SectorRankingItem[]  // 信号强的 TOP
+  watchSignals: SectorRankingItem[]   // 观察信号的
+  weakSignals: SectorRankingItem[]    // 弱势信号的
+  allRankings: SectorRankingItem[]    // 全部排序
 }

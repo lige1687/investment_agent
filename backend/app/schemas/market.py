@@ -1,9 +1,25 @@
 """Market data Pydantic schemas."""
 from datetime import datetime
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MarketDataMeta(BaseModel):
+    """Provenance and usability state shared by market-data responses."""
+
+    source: str
+    fetched_at: datetime
+    mode: Literal["live", "demo"]
+    status: Literal["ok", "empty", "unavailable", "invalid"]
+    stale: bool = False
+    is_mock: bool = False
+    message: str | None = None
 
 
 class QuoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     symbol: str
     name: str = ""
     price: float = 0.0
@@ -17,12 +33,9 @@ class QuoteResponse(BaseModel):
     prev_close: float | None = None
     timestamp: str = ""
 
-    class Config:
-        from_attributes = True
-
-
 class QuotesListResponse(BaseModel):
     quotes: list[QuoteResponse]
+    meta: MarketDataMeta
 
 
 class KlineItem(BaseModel):
@@ -39,6 +52,7 @@ class KlineResponse(BaseModel):
     symbol: str
     period: str
     klines: list[KlineItem]
+    meta: MarketDataMeta
 
 
 class IndexResponse(BaseModel):
@@ -51,6 +65,7 @@ class IndexResponse(BaseModel):
 
 class IndicesListResponse(BaseModel):
     indices: list[IndexResponse]
+    meta: MarketDataMeta
 
 
 class SectorItem(BaseModel):
@@ -67,6 +82,7 @@ class SectorItem(BaseModel):
 
 class HeatmapResponse(BaseModel):
     sectors: list[SectorItem]
+    meta: MarketDataMeta
 
 
 # ── Market Diagnosis Schemas ──
@@ -115,6 +131,7 @@ class DiagnosisResponse(BaseModel):
     sector_rotation: list[SectorRotationItem] = []
     north_bound_sectors: list[CapitalFlowItem] = []  # 北向资金加仓板块
     summary: str = ""  # AI-generated diagnosis summary
+    meta: MarketDataMeta
 
 
 # ── Sector Ranking Schemas ──
@@ -162,3 +179,4 @@ class SectorRankingResponse(BaseModel):
     watch_signals: list[SectorRankingItem] = []   # 观察信号的
     weak_signals: list[SectorRankingItem] = []    # 弱势信号的
     all_rankings: list[SectorRankingItem] = []    # 全部排序
+    meta: MarketDataMeta

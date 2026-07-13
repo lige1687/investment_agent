@@ -119,7 +119,10 @@ export default function DecisionCardView({ card, onActionMarked }: Props) {
         axisName: {
           color: '#666',
           fontSize: 12,
-          formatter: (name: string) => name.includes('暂无') ? `{missing|${name}}` : name,
+          formatter: (name?: string) => {
+            const label = name ?? ''
+            return label.includes('暂无') ? `{missing|${label}}` : label
+          },
           rich: { missing: { color: '#bfbfbf' } },
         },
         splitLine: { lineStyle: { color: '#eee' } },
