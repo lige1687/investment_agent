@@ -69,10 +69,12 @@ class Settings(BaseSettings):
     # available only when demo mode is selected explicitly.
     market_data_mode: Literal["live", "demo"] = "live"
 
-    # Daily trading room. The API key continues to come from LLM_API_KEY;
-    # role-specific settings never travel to the frontend or database.
+    # Daily trading room. Credentials are isolated from the default provider so
+    # the room can use DeepSeek while the rest of the application uses Claude.
     trading_room_llm_provider: str = "deepseek"
     trading_room_llm_model: str = "deepseek-v4-flash"
+    trading_room_llm_api_key: str = ""
+    trading_room_llm_base_url: str = ""
     trading_room_analysis_temperature: float = 0.1
     trading_room_chair_temperature: float = 0.2
     trading_skill_root: str = "~/.codex/skills"

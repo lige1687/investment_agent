@@ -54,8 +54,8 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
     if role in TRADING_ROOM_ROLES:
         provider = settings.trading_room_llm_provider
         model = settings.trading_room_llm_model
-        api_key = default_key
-        base_url = default_base
+        api_key = settings.trading_room_llm_api_key or default_key
+        base_url = settings.trading_room_llm_base_url or default_base
     elif role and role in VALID_ROLES:
         role_prefix = f"llm_{role}_"
         provider = pick(getattr(settings, role_prefix + "provider"), default_provider)

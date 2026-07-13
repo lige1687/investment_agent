@@ -55,6 +55,24 @@ def test_trading_room_roles_resolve_current_deepseek_model(monkeypatch):
         assert config.model not in {"deepseek-chat", "deepseek-reasoner"}
 
 
+def test_trading_room_roles_use_their_own_credentials(monkeypatch):
+    assert "trading_room_llm_api_key" in type(settings).model_fields
+    assert "trading_room_llm_base_url" in type(settings).model_fields
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_api_key", "claude-default-key")
+    monkeypatch.setattr(settings, "llm_base_url", "https://claude.example")
+    monkeypatch.setattr(settings, "trading_room_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "trading_room_llm_model", "deepseek-v4-flash")
+    monkeypatch.setattr(settings, "trading_room_llm_api_key", "deepseek-room-key")
+    monkeypatch.setattr(settings, "trading_room_llm_base_url", "https://deepseek.example")
+
+    config = _resolve_config("chair")
+
+    assert config.provider == "deepseek"
+    assert config.api_key == "deepseek-room-key"
+    assert config.base_url == "https://deepseek.example"
+
+
 @pytest.mark.asyncio
 async def test_valid_response_is_parsed_and_json_output_is_requested():
     client = FakeClient(
