@@ -1,0 +1,20 @@
+import axios from 'axios'
+
+// Default 15s is too tight — the advisor agent runs a multi-turn tool loop
+// (typically 3-6 turns, ~10-25s total). We raise the default and let long-
+// running endpoints override further if needed.
+const apiClient = axios.create({
+  baseURL: '/api/v1',
+  timeout: 120000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('API Error:', error.response?.data || error.message)
+    return Promise.reject(error)
+  }
+)
+
+export default apiClient

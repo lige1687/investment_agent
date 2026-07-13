@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>养基宝扫码登录</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f0f2f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .card { background: #fff; padding: 40px; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); text-align: center; max-width: 420px; width: 90%; }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+  #qr-container { margin: 16px 0; }
+  #qr-img { width: 240px; height: 240px; border: 3px solid #1677ff; border-radius: 12px; }
+  #status { margin-top: 16px; font-size: 16px; font-weight: bold; }
+  .pending { color: #fa8c16; }
+  .confirmed { color: #52c41a; }
+  .expired { color: #ff4d4f; }
+  #info { margin-top: 8px; color: #999; font-size: 12px; }
+  #result { margin-top: 24px; padding: 16px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px; text-align: left; font-size: 13px; display: none; }
+  #result h3 { color: #52c41a; margin-bottom: 8px; }
+  button { margin-top: 16px; padding: 10px 32px; font-size: 16px; background: #1677ff; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+  button:hover { background: #4096ff; }
+  button:disabled { background: #d9d9d9; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>📱 养基宝扫码登录</h1>
+  <p class="subtitle">请打开养基宝APP，扫描二维码授权登录</p>
+  <div id="qr-container">
+    <div id="loading" style="padding: 40px; color: #999;">正在生成二维码...</div>
+    <img id="qr-img" style="display:none" alt="QR Code" />
+  </div>
+  <div id="status"></div>
+  <div id="info"></div>
+  <button id="refresh-btn" style="display:none" onclick="startLogin()">刷新二维码</button>
+  <div id="result">
+    <h3>✅ 登录成功！</h3>
+    <div id="result-content"></div>
+  </div>
+</div>
+
+<script>
+let pollTimer = null;
+
+async function startLogin() {
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('qr-img').style.display = 'none';
+  document.getElementById('status').textContent = '';
+  document.getElementById('info').textContent = '';
+  document.getElementById('refresh-btn').style.display = 'none';
+  document.getElementById('result').style.display = 'none';
+  if (pollTimer) clearInterval(pollTimer);
+
+  try {
+    const r = await fetch('/api/v1/yangjibao/login', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+
+    document.getElementById('loading').style.display = 'none';
+    const img = document.getElementById('qr-img');
+    img.src = 'data:image/png;base64,' + data.qr_image;
+    img.style.display = 'inline-block';
+
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = '⬆ 等待扫码...';
+    statusEl.className = 'pending';
+    document.getElementById('info').textContent = 'QR ID: ' + data.qr_id.substring(0, 25) + '...';
+
+    // Start polling
+    let count = 0;
+    pollTimer = setInterval(async () => {
+      count++;
+      try {
+        const cr = await fetch('/api/v1/yangjibao/login/check');
+        const check = await cr.json();
+        document.getElementById('info').textContent = '轮询 #' + count + ' - ' + check.status;
+
+        if (check.status === 'confirmed') {
+          clearInterval(pollTimer);
+          statusEl.textContent = '✅ 登录成功！同步持仓中...';
+          statusEl.className = 'confirmed';
+
+          // Sync portfolio
+          const sr = await fetch('/api/v1/yangjibao/sync', { method: 'POST' });
+          const sync = await sr.json();
+
+          // Load portfolio
+          const pr = await fetch('/api/v1/yangjibao/portfolio');
+          const portfolio = await pr.json();
+
+          const resultDiv = document.getElementById('result');
+          resultDiv.style.display = 'block';
+          document.getElementById('result-content').innerHTML =
+            '<p>📊 持仓数: <b>' + portfolio.positions.length + '</b></p>' +
+            '<p>💰 总市值: <b>¥' + (portfolio.total_value || 0).toFixed(2) + '</b></p>' +
+            '<p>📈 总盈亏: <b style="color:' + (portfolio.total_pnl >= 0 ? '#cf1322' : '#3f8600') + '">¥' + (portfolio.total_pnl || 0).toFixed(2) + '</b></p>' +
+            '<p style="margin-top:8px"><a href="/settings">返回设置页查看持仓详情 →</a></p>' +
+            '<p style="margin-top:8px"><a href="/">返回首页 →</a></p>';
+          return;
+        }
+
+        if (check.status === 'expired') {
+          clearInterval(pollTimer);
+          statusEl.textContent = '❌ 二维码已过期';
+          statusEl.className = 'expired';
+          document.getElementById('refresh-btn').style.display = 'inline-block';
+          return;
+        }
+
+        if (check.status === 'scanned') {
+          statusEl.textContent = '📱 已扫描，请在手机上确认...';
+        }
+      } catch(e) {
+        document.getElementById('info').textContent = '轮询错误: ' + e.message;
+      }
+    }, 2000);
+
+  } catch(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('status').textContent = '❌ 获取二维码失败: ' + e.message;
+    document.getElementById('status').className = 'expired';
+    document.getElementById('refresh-btn').style.display = 'inline-block';
+  }
+}
+
+// Auto-start
+startLogin();
+</script>
+</body>
+</html>

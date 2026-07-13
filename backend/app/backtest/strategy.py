@@ -1,0 +1,213 @@
+"""Strategy decision policy for triggered backtest events."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from app.backtest.events import BacktestEvent
+from app.backtest.models import BacktestConfig
+
+StrategyAction = Literal["buy", "sell", "observe", "hold"]
+
+
+@dataclass(frozen=True)
+class StrategyDecision:
+    action: StrategyAction
+    reason: str
+    target_position_delta_pct: float = 0.0
+    ratio_of_position: float = 0.0
+    observe_days: int = 0
+
+
+class RuleBasedStrategyAgent:
+    """Deterministic MVP substitute for a future LLM strategy agent."""
+
+    def __init__(self, config: BacktestConfig):
+        self.config = config
+
+    def decide(self, event: BacktestEvent) -> StrategyDecision:
+        if event.event_type == "account_risk":
+            return StrategyDecision(
+                action="observe",
+                reason="账户级风控触发，禁止买入/禁止加仓，先保账户风险",
+            )
+        if event.event_type == "buy_candidate":
+            # 在进入观察期前，先检查一些关键风控
+            trigger_signals = event.details.get("trigger_signals", [])
+            if any(
+                trigger.get("priority") == "P0" and trigger.get("trigger_family") == "account_risk"
+                for trigger in trigger_signals
+                if isinstance(trigger, dict)
+            ):
+                return StrategyDecision(
+                    action="observe",
+                    observe_days=self.config.observe_days,
+                    reason="P0账户风控触发，禁止买入/禁止加仓，先重新评估账户风险",
+                )
+
+            # 检查 dust 买入（剩余仓位空间太小）
+            snapshot = event.snapshot
+            current_position_pct = snapshot.position_pct if snapshot else 0.0
+            effective_target = min(
+                self.config.target_position_pct,
+                self.config.max_single_position_pct,
+                self.config.max_account_position_pct,
+            )
+            remaining_target = max(effective_target - current_position_pct, 0.0)
+            if remaining_target < self.config.min_trade_position_pct:
+                return StrategyDecision(
+                    action="hold",
+                    reason="剩余可买空间低于最小交易仓位，忽略零头补仓",
+                )
+
+            # 分级观察期：根据信号强度决定观察期长度
+            buy_signal = event.details.get("buy_signal", {})
+            signal_level = buy_signal.get("signal_level")
+
+            if signal_level == "strong_buy":
+                # 强买信号（5/5维度）：立即执行，无需观察
+                return StrategyDecision(
+                    action="observe",
+                    reason="强买信号闭环（5/5维度），立即进入确认流程，无需等待",
+                    observe_days=0,
+                )
+            elif signal_level == "middle_buy":
+                # 中等买信号（4/5维度）：观察1天确认
+                return StrategyDecision(
+                    action="observe",
+                    reason="中等买信号已基本确认（4/5维度），观察1天确认持续性",
+                    observe_days=1,
+                )
+            else:  # weak_buy
+                # 弱买信号（3/5维度）：观察2天确认
+                return StrategyDecision(
+                    action="observe",
+                    reason="弱买信号需要确认（3/5维度），观察2天确认条件持续满足",
+                    observe_days=2,
+                )
+        if event.event_type == "buy_confirmation":
+            return self._decide_buy(event)
+        if event.event_type == "risk_block":
+            return StrategyDecision(
+                action="observe",
+                reason="账户级风控禁止新增风险，禁止买入/禁止加仓",
+            )
+        if event.event_type == "profit_drawdown":
+            snapshot = event.snapshot
+            if snapshot and snapshot.position_pct < self.config.min_trade_position_pct:
+                return StrategyDecision(
+                    action="hold",
+                    reason="剩余仓位低于最小交易仓位，小仓位不做碎片化止盈",
+                )
+            return StrategyDecision(
+                action="sell",
+                ratio_of_position=0.5,
+                observe_days=self.config.observe_days,
+                reason="收益高点回撤达到阈值，按批次交易系统检查基金批次自身浮盈与回撤，命中批次按卖出优先级处理",
+            )
+        if event.event_type == "technical_breakdown":
+            return StrategyDecision(
+                action="sell",
+                ratio_of_position=0.5,
+                observe_days=self.config.observe_days,
+                reason="参考标的放量跌破关键EXPMA，按批次交易系统优先卖出高位/灵活仓和确认仓，核心仓继续观察",
+            )
+        if event.event_type == "post_sell_observation":
+            snapshot = event.snapshot
+            if snapshot and snapshot.position_pct < self.config.min_trade_position_pct:
+                return StrategyDecision(
+                    action="hold",
+                    reason="卖后观察期内剩余仓位低于最小交易仓位，不做碎片化处理",
+                )
+            if event.details.get("recommended_action") == "sell":
+                return StrategyDecision(
+                    action="sell",
+                    ratio_of_position=0.5,
+                    observe_days=3,
+                    reason="卖后观察期复核仍未修复，按批次交易系统继续处理剩余风险仓位",
+                )
+            return StrategyDecision(
+                action="observe",
+                observe_days=1,
+                reason="卖后观察期复核未命中继续卖出条件，剩余仓位暂不处理且禁止情绪化接回",
+            )
+        if event.event_type == "stop_loss":
+            return StrategyDecision(
+                action="sell",
+                ratio_of_position=1.0,
+                reason="持仓亏损达到止损阈值，执行清仓止损",
+            )
+        return StrategyDecision(action="hold", reason="事件类型未匹配动作，保持不动")
+
+    def _decide_buy(self, event: BacktestEvent) -> StrategyDecision:
+        trigger_signals = event.details.get("trigger_signals", [])
+        if any(
+            trigger.get("priority") == "P0" and trigger.get("trigger_family") == "account_risk"
+            for trigger in trigger_signals
+            if isinstance(trigger, dict)
+        ):
+            return StrategyDecision(
+                action="observe",
+                observe_days=self.config.observe_days,
+                reason="P0账户风控触发，禁止买入/禁止加仓，先重新评估账户风险",
+            )
+        snapshot = event.snapshot
+        current_position_pct = snapshot.position_pct if snapshot else 0.0
+        effective_target = min(
+            self.config.target_position_pct,
+            self.config.max_single_position_pct,
+            self.config.max_account_position_pct,
+        )
+        remaining_target = max(effective_target - current_position_pct, 0.0)
+        if remaining_target <= 0:
+            return StrategyDecision(action="hold", reason="当前仓位已达到目标仓位，不再加仓")
+        if remaining_target < self.config.min_trade_position_pct:
+            return StrategyDecision(action="hold", reason="剩余可买空间低于最小交易仓位，忽略零头补仓")
+
+        # 对于 buy_confirmation 事件，使用原始的买入信号
+        buy_signal = event.details.get("original_buy_signal", {})
+        signal_level = buy_signal.get("signal_level")
+
+        # batch-trading-market-regime 结果透传至此（batch-trading-batch-planner）
+        market_regime = event.details.get("market_regime", "neutral")
+
+        # 分级建仓规模：信号强度 × 市场环境双重调节
+        #
+        # 设计逻辑（对应 batch-trading-batch-planner skill）：
+        #   strong_buy：bull=100%，neutral=100%，bear=70%（降档保护）
+        #   middle_buy：bull=70%，neutral=70%，bear=40%（降档保护）
+        #   weak_buy：  bull=50%，neutral=30%（已在 bear 市被阻断，不会到这里）
+        if signal_level == "strong_buy":
+            if market_regime == "bear":
+                buy_scale = 0.7
+                scale_reason = "强买信号（5/5维度）但market_regime=bear，降档至70%目标仓位"
+            else:
+                buy_scale = 1.0
+                scale_reason = f"强买信号（5/5维度），market_regime={market_regime}，建满100%目标仓位"
+        elif signal_level == "middle_buy":
+            if market_regime == "bear":
+                buy_scale = 0.4
+                scale_reason = "中等买信号（4/5维度）但market_regime=bear，降档至40%目标仓位"
+            else:
+                buy_scale = 0.7
+                scale_reason = f"中等买信号（4/5维度），market_regime={market_regime}，建仓70%目标仓位"
+        else:  # weak_buy（此时 market_regime 必然为 neutral 或 bull）
+            if market_regime == "bull":
+                buy_scale = 0.5
+                scale_reason = "弱买信号（3/5维度）且market_regime=bull，建仓50%目标仓位"
+            else:
+                buy_scale = 0.3
+                scale_reason = "弱买信号（3/5维度），market_regime=neutral，谨慎建仓30%目标仓位"
+
+        buy_size = min(effective_target * buy_scale, remaining_target)
+        if buy_size < self.config.min_trade_position_pct:
+            return StrategyDecision(action="hold", reason="本次买入低于最小交易仓位，忽略零头补仓")
+
+        reason = f"{scale_reason}，保留后续确认仓位"
+
+        return StrategyDecision(
+            action="buy",
+            target_position_delta_pct=round(buy_size, 4),
+            observe_days=5,
+            reason=reason,
+        )

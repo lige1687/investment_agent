@@ -1,0 +1,44 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*key*.env
+
+# Local databases and runtime state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+backend/data/
+frontend/data/
+
+# Dependencies and build output
+node_modules/
+frontend/node_modules/
+dist/
+build/
+coverage/
+.vite/
+
+# Python caches and packaging output
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Local tools, generated downloads, and private captures
+.claude/
+.gstack/
+temp_download/
+screenshots/
+skills/.skills_store_lock.json
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
