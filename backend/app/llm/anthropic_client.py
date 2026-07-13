@@ -188,6 +188,7 @@ class AnthropicClient(LLMClient):
         temperature: float = 0.3,
         max_tokens: int = 4096,
         system: Optional[str] = None,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> LLMResponse:
         payload = self._build_payload(messages, tools, temperature, max_tokens, system, stream=False)
         url = f"{self.base_url}/v1/messages"

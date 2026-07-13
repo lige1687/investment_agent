@@ -410,3 +410,20 @@ def test_openai_tool_choice_auto_when_tools_present():
     )
     assert payload["tool_choice"] == "auto"
     assert len(payload["tools"]) == 1
+
+
+def test_openai_payload_can_request_json_object_without_beta_strict_mode():
+    client = OpenAICompatClient(
+        model="deepseek-v4-flash", api_key="sk-fake", provider_hint="deepseek",
+    )
+    payload = client._build_payload(
+        [Message.user("return json")],
+        tools=None,
+        temperature=0.1,
+        max_tokens=512,
+        system=None,
+        stream=False,
+        response_format={"type": "json_object"},
+    )
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "strict" not in json.dumps(payload)

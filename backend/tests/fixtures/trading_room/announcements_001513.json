@@ -1,0 +1,54 @@
+[
+  {
+    "fund_code": "001513",
+    "share_classes": ["A"],
+    "customer_scope": "all",
+    "action": "SUSPENDED",
+    "effective_date": "2026-04-01",
+    "published_at": "2026-03-31T18:00:00+08:00",
+    "title": "易方达信息产业混合A暂停大额申购公告",
+    "url": "https://example.test/001513-suspend"
+  },
+  {
+    "fund_code": "001513",
+    "share_classes": ["A"],
+    "customer_scope": "all",
+    "action": "OPEN",
+    "effective_date": "2026-04-08",
+    "published_at": "2026-04-07T18:00:00+08:00",
+    "title": "易方达信息产业混合A恢复申购公告",
+    "url": "https://example.test/001513-resume"
+  },
+  {
+    "fund_code": "001513",
+    "share_classes": ["A", "C"],
+    "customer_scope": "all",
+    "action": "LIMITED",
+    "purchase_limit": 100000,
+    "effective_date": "2026-05-12",
+    "published_at": "2026-05-11T18:00:00+08:00",
+    "title": "易方达信息产业混合调整大额申购限额公告",
+    "url": "https://example.test/001513-limit-100000"
+  },
+  {
+    "fund_code": "001513",
+    "share_classes": ["A", "C"],
+    "customer_scope": "all",
+    "action": "LIMITED",
+    "purchase_limit": 10000,
+    "effective_date": "2026-06-25",
+    "published_at": "2026-06-24T18:00:00+08:00",
+    "title": "易方达信息产业混合调整大额申购限额至1万元公告",
+    "url": "https://example.test/001513-limit-10000"
+  },
+  {
+    "fund_code": "001513",
+    "share_classes": ["C"],
+    "customer_scope": "institutional",
+    "action": "OPEN",
+    "effective_date": "2026-07-01",
+    "published_at": "2026-06-30T18:00:00+08:00",
+    "title": "仅机构客户C类份额恢复申购公告",
+    "url": "https://example.test/001513-c-institutional"
+  }
+]

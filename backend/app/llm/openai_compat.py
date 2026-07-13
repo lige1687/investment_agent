@@ -184,6 +184,7 @@ class OpenAICompatClient(LLMClient):
         max_tokens: int,
         system: Optional[str],
         stream: bool,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         # Prepend a system message if the caller passed one AND no leading system exists
         msgs = list(messages)
@@ -200,6 +201,8 @@ class OpenAICompatClient(LLMClient):
         if oai_tools:
             payload["tools"] = oai_tools
             payload["tool_choice"] = "auto"
+        if response_format:
+            payload["response_format"] = response_format
         if stream:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
@@ -213,9 +216,18 @@ class OpenAICompatClient(LLMClient):
         temperature: float = 0.3,
         max_tokens: int = 4096,
         system: Optional[str] = None,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> LLMResponse:
         url = f"{self.base_url}/v1/chat/completions"
-        payload = self._build_payload(messages, tools, temperature, max_tokens, system, stream=False)
+        payload = self._build_payload(
+            messages,
+            tools,
+            temperature,
+            max_tokens,
+            system,
+            stream=False,
+            response_format=response_format,
+        )
         try:
             resp = await self._client.post(url, headers=self._headers(), json=payload)
         except httpx.HTTPError as e:

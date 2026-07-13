@@ -1,0 +1,65 @@
+{
+  "themes": {
+    "通信": {"proxy": "通信设备ETF"},
+    "纳斯达克": {"proxy": "IXIC"},
+    "全球基金": {"proxy": "MSCI World"}
+  },
+  "responses": {
+    "portfolio_risk": {
+      "summary": "账户回撤与现金均在可讨论范围",
+      "evidence_refs": ["ev_portfolio"],
+      "risk_state": "NORMAL",
+      "new_buy_allowed": true,
+      "findings": []
+    },
+    "market_regime": {
+      "summary": "市场环境允许条件性参与",
+      "evidence_refs": ["ev_market"],
+      "phase": "startup",
+      "regime_score": 78,
+      "buy_permission": "conditional",
+      "counter_evidence": ["海外市场日期晚于A股"]
+    },
+    "theme_fund": {
+      "summary": "易方达信息产业对通信题材为中等置信度暴露",
+      "evidence_refs": ["ev_holdings", "ev_nav_regression"],
+      "fund_code": "001513",
+      "theme": "通信",
+      "phase": "startup",
+      "exposure_confidence": "MEDIUM",
+      "report_period_end": "2026-06-30",
+      "supporting_evidence": ["公开持仓", "净值回归"],
+      "counter_evidence": []
+    },
+    "buy": {
+      "summary": "分数达到明显机会线，但销售渠道尚需确认",
+      "evidence_refs": ["ev_market", "ev_holdings"],
+      "score": 82,
+      "action_class": "IMMEDIATE",
+      "suggested_range": {"minimum": 1000, "maximum": 5000, "currency": "CNY"},
+      "triggers": ["题材维持启动阶段"],
+      "invalidations": ["连续收盘确认趋势破坏"]
+    },
+    "sell_protection": {
+      "summary": "当前无逻辑失效或有效趋势破坏",
+      "evidence_refs": ["ev_market"],
+      "action_class": "WATCH",
+      "suggested_range": null,
+      "reason_priority": "none",
+      "triggers": []
+    },
+    "skeptic": {
+      "summary": "销售渠道未确认是当前主要缺口",
+      "evidence_refs": ["ev_announcement"],
+      "findings": [
+        {
+          "issue_type": "missing_input",
+          "description": "基金公司限购公告不能证明支付宝渠道可下单",
+          "impact": "立即操作必须降为条件操作",
+          "evidence_ref": "ev_announcement",
+          "missing_field": "channel_confirmed"
+        }
+      ]
+    }
+  }
+}

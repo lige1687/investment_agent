@@ -20,7 +20,12 @@ from app.llm.openai_compat import OpenAICompatClient
 logger = logging.getLogger(__name__)
 
 
-VALID_ROLES = {"intent_router", "advisor", "scout", "guardian"}
+TRADING_ROOM_ROLES = {
+    "market_regime", "theme_fund", "portfolio_risk", "buy",
+    "sell_protection", "skeptic", "recorder", "chair",
+}
+VALID_ROLES = {"intent_router", "advisor", "scout", "guardian"} | TRADING_ROOM_ROLES
+DEPRECATED_DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
 
 # Providers that route to OpenAICompatClient. Anything else falls back to
 # the default llm_provider setting.
@@ -46,7 +51,12 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
     default_key = settings.llm_api_key
     default_base = settings.llm_base_url
 
-    if role and role in VALID_ROLES:
+    if role in TRADING_ROOM_ROLES:
+        provider = settings.trading_room_llm_provider
+        model = settings.trading_room_llm_model
+        api_key = default_key
+        base_url = default_base
+    elif role and role in VALID_ROLES:
         role_prefix = f"llm_{role}_"
         provider = pick(getattr(settings, role_prefix + "provider"), default_provider)
         model = pick(getattr(settings, role_prefix + "model"), default_model)
@@ -66,6 +76,11 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
             model = settings.anthropic_model
         if not base_url:
             base_url = settings.anthropic_base_url
+
+    if provider.lower() == "deepseek" and model in DEPRECATED_DEEPSEEK_MODELS:
+        raise LLMError(
+            f"Deprecated DeepSeek model configured for role {role!r}", provider="deepseek"
+        )
 
     return LLMConfig(
         provider=provider.lower(),

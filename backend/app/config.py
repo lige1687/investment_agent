@@ -69,6 +69,18 @@ class Settings(BaseSettings):
     # available only when demo mode is selected explicitly.
     market_data_mode: Literal["live", "demo"] = "live"
 
+    # Daily trading room. The API key continues to come from LLM_API_KEY;
+    # role-specific settings never travel to the frontend or database.
+    trading_room_llm_provider: str = "deepseek"
+    trading_room_llm_model: str = "deepseek-v4-flash"
+    trading_room_analysis_temperature: float = 0.1
+    trading_room_chair_temperature: float = 0.2
+    trading_skill_root: str = "~/.codex/skills"
+    market_skill_root: str = "~/.openclaw/workspace/skills"
+    execution_preflight_fresh_minutes: int = 15
+    iwencai_api_key: str = ""
+    iwencai_api_base_url: str = "https://openapi.iwencai.com"
+
     # Feishu
     feishu_webhook_url: str = ""
     # Guardian scheduling & push

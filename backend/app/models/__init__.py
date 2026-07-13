@@ -11,6 +11,15 @@ from app.models.feishu import FeishuConfig
 from app.models.yangjibao import YangjibaoToken
 from app.models.agent_context import AgentContextSnapshot
 from app.models.evidence import Evidence, StoredDecision, GuardianRun
+from app.models.trading_room import (
+    FundExposureSnapshotRecord,
+    FundTradeStatusSnapshotRecord,
+    PolicyChangeProposalRecord,
+    SpecialistMemoRecord,
+    TradingPolicyVersion,
+    TradingRoomMessageRecord,
+    TradingRoomSession,
+)
 
 __all__ = [
     "Base",
@@ -25,4 +34,7 @@ __all__ = [
     "YangjibaoToken",
     "AgentContextSnapshot",
     "Evidence", "StoredDecision", "GuardianRun",
+    "TradingPolicyVersion", "TradingRoomSession", "SpecialistMemoRecord",
+    "TradingRoomMessageRecord", "PolicyChangeProposalRecord",
+    "FundExposureSnapshotRecord", "FundTradeStatusSnapshotRecord",
 ]

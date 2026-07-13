@@ -5,7 +5,7 @@ Agent code only imports from here, never from a specific provider module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 from app.llm.schemas import LLMChunk, LLMResponse, Message, ToolDef
 
@@ -59,6 +59,7 @@ class LLMClient(ABC):
         temperature: float = 0.3,
         max_tokens: int = 4096,
         system: Optional[str] = None,
+        response_format: Optional[dict[str, Any]] = None,
     ) -> LLMResponse:
         """One non-streaming completion."""
         ...

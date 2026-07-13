@@ -12,6 +12,7 @@ import {
   FundProjectionScreenOutlined,
   HeatMapOutlined,
   SafetyOutlined,
+  CommentOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import HeaderBar from './Header'
@@ -28,6 +29,7 @@ const menuItems = [
   { key: '/portfolio', icon: <WalletOutlined />, label: '持仓' },
   { key: '/alerts', icon: <AlertOutlined />, label: '预警' },
   { key: '/agent', icon: <RobotOutlined />, label: 'AI助手' },
+  { key: '/trading-room', icon: <CommentOutlined />, label: '今日讨论室' },
   { key: '/guardian', icon: <SafetyOutlined />, label: '守护 Guardian' },
   { key: '/backtest', icon: <FundProjectionScreenOutlined />, label: '回测' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },

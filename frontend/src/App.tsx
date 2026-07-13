@@ -11,6 +11,7 @@ import AgentChatPage from './components/agent/AgentChatPage'
 import GuardianDashboardPage from './components/guardian/GuardianDashboardPage'
 import BacktestPage from './components/backtest/BacktestPage'
 import SectorRankingBoard from './components/sector/SectorRankingBoard'
+import TradingRoomPage from './components/trading-room/TradingRoomPage'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/alerts" element={<AlertPage />} />
         <Route path="/agent" element={<AgentChatPage />} />
+        <Route path="/trading-room" element={<TradingRoomPage />} />
         <Route path="/guardian" element={<GuardianDashboardPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/settings" element={<SettingsPage />} />
