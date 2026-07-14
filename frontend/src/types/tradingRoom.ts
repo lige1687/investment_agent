@@ -40,9 +40,10 @@ export interface TradingContextSnapshot {
   data_mode: 'live' | 'demo'
   market_dates: Record<string, string>
   positions: Record<string, unknown>[]
-  cash: number
-  equity: number
-  peak_equity: number
+  cash: number | null
+  holdings_value: number
+  equity: number | null
+  peak_equity: number | null
   pending_orders: Record<string, unknown>[]
   themes: Record<string, unknown>
   funds: Record<string, unknown>
@@ -52,7 +53,15 @@ export interface TradingContextSnapshot {
   status: 'complete' | 'incomplete'
   formally_actionable: boolean
   blockers: string[]
+  execution_ready: boolean
+  execution_blockers: string[]
   context_hash: string
+}
+
+export interface ExecutionFundingInput {
+  available_cash: number
+  pending_buy_amount: number
+  consumed_purchase_today: number
 }
 
 export interface DecisionRange {
@@ -118,13 +127,7 @@ export interface SessionCreatePayload {
   as_of: string
   data_mode: 'live' | 'demo'
   market_dates: Record<string, string>
-  positions: Record<string, unknown>[]
-  cash: number
-  equity: number
-  peak_equity: number
-  pending_orders: Record<string, unknown>[]
   themes: Record<string, unknown>
-  funds: Record<string, unknown>
   skill_versions: Record<string, string>
   critical_inputs: CriticalDataInput[]
   exposure_snapshots?: Array<Record<string, unknown>>

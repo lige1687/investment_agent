@@ -1,5 +1,7 @@
 import apiClient from './client'
 import type {
+  ExecutionFundingInput,
+  FinalDecision,
   SessionCreatePayload,
   TargetAllocation,
   TradingPolicy,
@@ -30,9 +32,21 @@ export const tradingRoomApi = {
     channel_confirmed: boolean
   }) => (await apiClient.post<Record<string, unknown>>('/agent/trading-room/preflight', payload)).data,
 
-  finalizeSession: async (sessionId: string, payload: Record<string, unknown>) =>
-    (await apiClient.post<{ session_id: string; decision: import('@/types/tradingRoom').FinalDecision }>(
+  finalizeSession: async (sessionId: string, payload: {
+    score: number
+    has_veto: boolean
+    suggested_range: { minimum: number; maximum: number; currency?: string }
+    preflight: Record<string, unknown>
+    execution_funding: ExecutionFundingInput | null
+    selected_amount?: number
+  }) =>
+    (await apiClient.post<{ session_id: string; decision: FinalDecision }>(
       `/agent/trading-room/sessions/${sessionId}/finalize`, payload,
+    )).data,
+
+  getLatestFunding: async () =>
+    (await apiClient.get<{ available_cash: number | null; confirmed_at: string | null }>(
+      '/agent/trading-room/funding/latest',
     )).data,
 
   getSession: async (sessionId: string) =>
