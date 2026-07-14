@@ -177,13 +177,10 @@ def _finalize_payload(*, status="OPEN", confirmed=True, selected_amount=None):
                 "CONDITIONAL" if status == "UNKNOWN" or not confirmed else "IMMEDIATE"
             ),
         },
-        "guard_inputs": {
-            "consumed_purchase_today": 0,
-            "account_equity": 100000,
-            "current_allocation_pct": 0.1,
-            "target_allocation_pct": 0.3,
+        "execution_funding": {
             "available_cash": 20000,
             "pending_buy_amount": 0,
+            "consumed_purchase_today": 0,
         },
     }
     if selected_amount is not None:
@@ -222,10 +219,14 @@ async def test_invalid_final_amount_returns_422_and_feedback_persists(client):
     policy = await _import_policy(
         client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
     )
+    # Use a different position so current_value=0 for 001513,
+    # making the guard produce a valid guarded_range.
+    payload = _session_payload(policy["version_id"])
+    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
     session = (
         await client.post(
             "/api/v1/agent/trading-room/sessions",
-            json=_session_payload(policy["version_id"]),
+            json=payload,
         )
     ).json()
     session_id = session["session_id"]
@@ -364,15 +365,15 @@ async def test_finalize_recomputes_cash_and_allocation_from_immutable_context(cl
     policy = await _import_policy(
         client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
     )
+    # No existing 001513 position; server uses execution_funding.available_cash
+    # (500) + holdings_value → small equity → available_cash limits below minimum.
     payload = _session_payload(policy["version_id"])
-    payload["cash"] = 500
+    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
     session = (
         await client.post("/api/v1/agent/trading-room/sessions", json=payload)
     ).json()
     claimed = _finalize_payload()
-    claimed["guard_inputs"]["available_cash"] = 1_000_000
-    claimed["guard_inputs"]["current_allocation_pct"] = 0
-    claimed["guard_inputs"]["target_allocation_pct"] = 1
+    claimed["execution_funding"]["available_cash"] = 500
 
     response = await client.post(
         f"/api/v1/agent/trading-room/sessions/{session['session_id']}/finalize",
@@ -381,5 +382,59 @@ async def test_finalize_recomputes_cash_and_allocation_from_immutable_context(cl
     assert response.status_code == 200
     decision = response.json()["decision"]
     assert decision["action_class"] == "NO_ACTION"
+    assert decision["guarded_range"] is None
+    assert "available_cash" in decision["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_funding_required_for_finalize(client):
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
+    )
+    session = (
+        await client.post(
+            "/api/v1/agent/trading-room/sessions",
+            json=_session_payload(policy["version_id"]),
+        )
+    ).json()
+
+    payload = _finalize_payload()
+    payload.pop("guard_inputs", None)
+    payload["execution_funding"] = None
+    response = await client.post(
+        f"/api/v1/agent/trading-room/sessions/{session['session_id']}/finalize",
+        json=payload,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "available_cash_confirmation_required"
+
+
+@pytest.mark.asyncio
+async def test_client_cannot_fake_equity_or_target(client):
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
+    )
+    # Remove 001513 from positions so current_value=0 for that fund,
+    # making available_cash (500) the binding cap below suggested minimum.
+    payload = _session_payload(policy["version_id"])
+    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
+    session = (
+        await client.post(
+            "/api/v1/agent/trading-room/sessions", json=payload,
+        )
+    ).json()
+
+    payload2 = _finalize_payload()
+    payload2.pop("guard_inputs", None)
+    payload2["execution_funding"] = {
+        "available_cash": 500,
+        "pending_buy_amount": 0,
+        "consumed_purchase_today": 0,
+    }
+    response = await client.post(
+        f"/api/v1/agent/trading-room/sessions/{session['session_id']}/finalize",
+        json=payload2,
+    )
+    decision = response.json()["decision"]
     assert decision["guarded_range"] is None
     assert "available_cash" in decision["reasons"]

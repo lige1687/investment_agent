@@ -1,6 +1,7 @@
 """Persistence contracts for replayable daily trading-room sessions."""
 
 import json
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -160,3 +161,47 @@ async def test_invalid_feedback_is_rejected(db_session):
 
     with pytest.raises(ValueError, match="invalid feedback state"):
         await store.record_feedback(session.id, state="maybe")
+
+
+@pytest.mark.asyncio
+async def test_store_saves_and_replays_funding_confirmation(db_session):
+    store = TradingRoomStore(db_session)
+    policy = _policy()
+    await store.save_policy(policy)
+    session = await store.create_session(
+        policy_version_id=policy.version_id,
+        context_snapshot={"as_of": "2026-07-14T14:30:00+08:00"},
+    )
+
+    funding = await store.save_funding_confirmation(
+        session_id=session.id,
+        fund_code="001513",
+        channel="支付宝",
+        available_cash=20_000,
+        pending_buy_amount=0,
+        consumed_purchase_today=0,
+        confirmed_at=datetime(2026, 7, 14, 14, 30),
+    )
+    replayed = await store.get_latest_funding_confirmation(
+        session.id, "001513", "支付宝",
+    )
+
+    assert replayed.id == funding.id
+    assert replayed.available_cash == 20_000
+    assert replayed.fund_code == "001513"
+    assert replayed.pending_buy_amount == 0
+
+    # Second fund with different consumed_purchase_today should not bleed.
+    await store.save_funding_confirmation(
+        session_id=session.id,
+        fund_code="003095",
+        channel="支付宝",
+        available_cash=20_000,
+        pending_buy_amount=0,
+        consumed_purchase_today=8_000,
+        confirmed_at=datetime(2026, 7, 14, 14, 31),
+    )
+    replayed_001513 = await store.get_latest_funding_confirmation(
+        session.id, "001513", "支付宝",
+    )
+    assert replayed_001513.consumed_purchase_today == 0

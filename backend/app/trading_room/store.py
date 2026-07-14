@@ -17,6 +17,7 @@ from app.models.trading_room import (
     PolicyChangeProposalRecord,
     SpecialistMemoRecord,
     TradingPolicyVersion,
+    TradingRoomFundingConfirmationRecord,
     TradingRoomMessageRecord,
     TradingRoomSession,
 )
@@ -207,6 +208,66 @@ class TradingRoomStore:
         row.feedback_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await self._db.flush()
         return row
+
+    async def save_funding_confirmation(
+        self, *,
+        session_id: str, fund_code: str, channel: str,
+        available_cash: float, pending_buy_amount: float,
+        consumed_purchase_today: float, confirmed_at: datetime,
+    ) -> TradingRoomFundingConfirmationRecord:
+        row = TradingRoomFundingConfirmationRecord(
+            session_id=session_id,
+            fund_code=fund_code,
+            channel=channel,
+            available_cash=available_cash,
+            pending_buy_amount=pending_buy_amount,
+            consumed_purchase_today=consumed_purchase_today,
+            confirmed_at=confirmed_at.replace(tzinfo=None),
+        )
+        self._db.add(row)
+        await self._db.flush()
+        return row
+
+    async def get_latest_funding_confirmation(
+        self, session_id: str, fund_code: str, channel: str,
+    ) -> TradingRoomFundingConfirmationRecord | None:
+        result = await self._db.execute(
+            select(TradingRoomFundingConfirmationRecord)
+            .where(
+                TradingRoomFundingConfirmationRecord.session_id == session_id,
+                TradingRoomFundingConfirmationRecord.fund_code == fund_code,
+                TradingRoomFundingConfirmationRecord.channel == channel,
+            )
+            .order_by(
+                desc(TradingRoomFundingConfirmationRecord.confirmed_at),
+                desc(TradingRoomFundingConfirmationRecord.id),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_funding_confirmations(
+        self, session_id: str,
+    ) -> list[TradingRoomFundingConfirmationRecord]:
+        result = await self._db.execute(
+            select(TradingRoomFundingConfirmationRecord)
+            .where(TradingRoomFundingConfirmationRecord.session_id == session_id)
+            .order_by(TradingRoomFundingConfirmationRecord.id)
+        )
+        return list(result.scalars().all())
+
+    async def get_latest_cash_confirmation(
+        self,
+    ) -> TradingRoomFundingConfirmationRecord | None:
+        result = await self._db.execute(
+            select(TradingRoomFundingConfirmationRecord)
+            .order_by(
+                desc(TradingRoomFundingConfirmationRecord.confirmed_at),
+                desc(TradingRoomFundingConfirmationRecord.id),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def finalize_session(
         self,

@@ -17,6 +17,7 @@ from app.models.trading_room import (
     PolicyChangeProposalRecord,
     SpecialistMemoRecord,
     TradingPolicyVersion,
+    TradingRoomFundingConfirmationRecord,
     TradingRoomMessageRecord,
     TradingRoomSession,
 )
@@ -37,4 +38,5 @@ __all__ = [
     "TradingPolicyVersion", "TradingRoomSession", "SpecialistMemoRecord",
     "TradingRoomMessageRecord", "PolicyChangeProposalRecord",
     "FundExposureSnapshotRecord", "FundTradeStatusSnapshotRecord",
+    "TradingRoomFundingConfirmationRecord",
 ]

@@ -71,12 +71,18 @@ class MessageRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExecutionFundingConfirmation(BaseModel):
+    available_cash: float = Field(ge=0)
+    pending_buy_amount: float = Field(default=0, ge=0)
+    consumed_purchase_today: float = Field(default=0, ge=0)
+
+
 class FinalizeRequest(BaseModel):
     score: int = Field(ge=0, le=100)
     has_veto: bool = False
     suggested_range: DecisionRange
     preflight: TradeStatusSnapshot
-    guard_inputs: BuyGuardInputs
+    execution_funding: ExecutionFundingConfirmation | None = None
     selected_amount: float | None = Field(default=None, ge=0)
 
 
@@ -312,6 +318,8 @@ async def finalize_session(
     db: AsyncSession = Depends(get_db),
 ):
     store = TradingRoomStore(db)
+    from zoneinfo import ZoneInfo
+
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="trading-room session not found")
@@ -335,27 +343,62 @@ async def finalize_session(
         requested=request.preflight,
         context=context,
     )
-    effective_guard_inputs = _guard_inputs_from_context(
-        context=context,
-        policy=policy,
-        fund_code=effective_preflight.fund_code,
-        consumed_purchase_today=request.guard_inputs.consumed_purchase_today,
-    )
-    if effective_guard_inputs is None:
+
+    # Resolve funding: if execution_funding is provided, save a confirmation record
+    # and use it for guard inputs.  Otherwise treat as unconfirmed.
+    now = datetime.now(ZoneInfo(settings.timezone))
+    if request.execution_funding is not None:
+        funding = request.execution_funding
+        await store.save_funding_confirmation(
+            session_id=session_id,
+            fund_code=effective_preflight.fund_code,
+            channel=_saved_preflight_channel(session, effective_preflight),
+            available_cash=funding.available_cash,
+            pending_buy_amount=funding.pending_buy_amount,
+            consumed_purchase_today=funding.consumed_purchase_today,
+            confirmed_at=now,
+        )
+        effective_guard_inputs = _guard_inputs_from_context(
+            context=context,
+            policy=policy,
+            fund_code=effective_preflight.fund_code,
+            execution_funding=funding,
+        )
+        if effective_guard_inputs is None:
+            decision = GuardedDecision(
+                action_class=ActionClass.WATCH,
+                suggested_range=request.suggested_range,
+                guarded_range=None,
+                immediately_executable=False,
+                reasons=("target_allocation_not_measurable",),
+            )
+        else:
+            decision = DecisionEngine.apply_buy_guard(
+                classified_action=classified,
+                suggested=request.suggested_range,
+                preflight=effective_preflight,
+                guard_inputs=effective_guard_inputs,
+            )
+    else:
+        effective_guard_inputs = _guard_inputs_from_context(
+            context=context,
+            policy=policy,
+            fund_code=effective_preflight.fund_code,
+            execution_funding=None,
+        )
+        if effective_guard_inputs is not None and classified is not ActionClass.WATCH:
+            raise HTTPException(
+                status_code=409,
+                detail="available_cash_confirmation_required",
+            )
         decision = GuardedDecision(
             action_class=ActionClass.WATCH,
             suggested_range=request.suggested_range,
             guarded_range=None,
             immediately_executable=False,
-            reasons=("target_allocation_not_measurable",),
+            reasons=("available_cash_confirmation_required",),
         )
-    else:
-        decision = DecisionEngine.apply_buy_guard(
-            classified_action=classified,
-            suggested=request.suggested_range,
-            preflight=effective_preflight,
-            guard_inputs=effective_guard_inputs,
-        )
+
     if not context.get("formally_actionable", False):
         decision = decision.model_copy(
             update={
@@ -382,6 +425,20 @@ async def finalize_session(
     )
     await store.finalize_session(session_id, decision=payload)
     return {"session_id": session_id, "decision": payload}
+
+
+@router.get("/trading-room/funding/latest")
+async def get_latest_funding_confirmation(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent available_cash and confirmed_at for prefill."""
+    record = await TradingRoomStore(db).get_latest_cash_confirmation()
+    if record is None:
+        return {"available_cash": None, "confirmed_at": None}
+    return {
+        "available_cash": record.available_cash,
+        "confirmed_at": record.confirmed_at.isoformat(),
+    }
 
 
 @router.post("/trading-room/sessions/{session_id}/actions")
@@ -483,6 +540,17 @@ async def _session_response(store: TradingRoomStore, session_id: str) -> dict[st
         "exposure_snapshots": [json.loads(item.snapshot_json) for item in row.exposure_snapshots],
         "trade_status_snapshots": [
             json.loads(item.snapshot_json) for item in row.trade_status_snapshots
+        ],
+        "funding_confirmations": [
+            {
+                "fund_code": item.fund_code,
+                "channel": item.channel,
+                "available_cash": item.available_cash,
+                "pending_buy_amount": item.pending_buy_amount,
+                "consumed_purchase_today": item.consumed_purchase_today,
+                "confirmed_at": item.confirmed_at.isoformat(),
+            }
+            for item in await store.list_funding_confirmations(session_id)
         ],
         "policy_proposals": [
             {
@@ -610,14 +678,33 @@ async def _effective_saved_preflight(
     return refreshed
 
 
+def _saved_preflight_channel(
+    session,
+    preflight: TradeStatusSnapshot,
+) -> str:
+    """Return the channel saved in the session snapshot for `preflight`."""
+    for row in reversed(session.trade_status_snapshots):
+        candidate = json.loads(row.snapshot_json)
+        if (
+            str(candidate.get("fund_code")) == preflight.fund_code
+            and str(candidate.get("share_class")) == preflight.share_class
+        ):
+            return str(candidate.get("channel") or "支付宝")
+    return "支付宝"
+
+
 def _guard_inputs_from_context(
     *,
     context: dict[str, Any],
     policy: TradingPolicy,
     fund_code: str,
-    consumed_purchase_today: float,
+    execution_funding: ExecutionFundingConfirmation | None = None,
 ) -> BuyGuardInputs | None:
-    """Recompute every measurable cap from immutable server-side inputs."""
+    """Recompute every measurable cap from immutable server-side inputs.
+
+    Uses execution_funding if available; otherwise uses context values
+    (which may be None/missing for an unconfirmed state).
+    """
     target = next(
         (
             item for item in policy.target_allocations
@@ -630,9 +717,30 @@ def _guard_inputs_from_context(
     if target is None:
         return None
 
-    equity = float(context.get("equity") or 0)
-    if equity <= 0:
-        return None
+    holdings_value = sum(
+        max(0.0, float(p.get("market_value") or 0))
+        for p in (context.get("positions") or [])
+        if isinstance(p, dict)
+    )
+
+    if execution_funding is not None:
+        account_equity = holdings_value + execution_funding.available_cash
+        available_cash = execution_funding.available_cash
+        pending_buy_amount = execution_funding.pending_buy_amount
+        consumed_purchase_today = execution_funding.consumed_purchase_today
+    else:
+        equity = float(context.get("equity") or 0)
+        if equity <= 0:
+            return None
+        account_equity = equity
+        available_cash = max(0.0, float(context.get("cash") or 0))
+        pending_buy_amount = sum(
+            max(0.0, float(order.get("amount") or 0))
+            for order in (context.get("pending_orders") or [])
+            if isinstance(order, dict) and str(order.get("side") or "").lower() == "buy"
+        )
+        consumed_purchase_today = 0
+
     current_value = 0.0
     for position in context.get("positions") or []:
         if not isinstance(position, dict):
@@ -640,16 +748,15 @@ def _guard_inputs_from_context(
         symbol = str(position.get("symbol") or position.get("fund_code") or "")
         if symbol == fund_code:
             current_value += max(0.0, float(position.get("market_value") or 0))
-    pending_buy = sum(
-        max(0.0, float(order.get("amount") or 0))
-        for order in (context.get("pending_orders") or [])
-        if isinstance(order, dict) and str(order.get("side") or "").lower() == "buy"
-    )
+
+    if account_equity <= 0:
+        return None
+
     return BuyGuardInputs(
         consumed_purchase_today=consumed_purchase_today,
-        account_equity=equity,
-        current_allocation_pct=current_value / equity,
+        account_equity=account_equity,
+        current_allocation_pct=current_value / account_equity,
         target_allocation_pct=target.target_pct,
-        available_cash=max(0.0, float(context.get("cash") or 0)),
-        pending_buy_amount=pending_buy,
+        available_cash=available_cash,
+        pending_buy_amount=pending_buy_amount,
     )

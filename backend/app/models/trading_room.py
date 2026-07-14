@@ -143,6 +143,24 @@ class FundTradeStatusSnapshotRecord(Base):
     session: Mapped[TradingRoomSession] = relationship(back_populates="trade_status_snapshots")
 
 
+class TradingRoomFundingConfirmationRecord(Base):
+    __tablename__ = "trading_room_funding_confirmations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("trading_room_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    fund_code: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(40), nullable=False)
+    available_cash: Mapped[float] = mapped_column(Float, nullable=False)
+    pending_buy_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    consumed_purchase_today: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 @event.listens_for(TradingPolicyVersion, "before_update")
 def _prevent_policy_rewrite(_mapper, _connection, target: TradingPolicyVersion) -> None:
     state = inspect(target)
