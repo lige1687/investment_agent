@@ -30,9 +30,10 @@ class TradingContextSnapshot(BaseModel):
     data_mode: Literal["live", "demo"]
     market_dates: dict[str, str]
     positions: list[dict[str, Any]]
-    cash: float = Field(ge=0)
-    equity: float = Field(gt=0)
-    peak_equity: float = Field(gt=0)
+    cash: float | None = Field(default=None, ge=0)
+    holdings_value: float = Field(ge=0)
+    equity: float | None = Field(default=None, gt=0)
+    peak_equity: float | None = Field(default=None, gt=0)
     pending_orders: list[dict[str, Any]]
     themes: dict[str, Any]
     funds: dict[str, Any]
@@ -42,6 +43,8 @@ class TradingContextSnapshot(BaseModel):
     status: Literal["complete", "incomplete"]
     formally_actionable: bool
     blockers: tuple[str, ...]
+    execution_ready: bool
+    execution_blockers: tuple[str, ...]
     context_hash: str
 
 
@@ -53,9 +56,9 @@ class TradingContextBuilder:
         data_mode: Literal["live", "demo"],
         market_dates: dict[str, str],
         positions: list[dict[str, Any]],
-        cash: float,
-        equity: float,
-        peak_equity: float,
+        cash: float | None = None,
+        equity: float | None = None,
+        peak_equity: float | None = None,
         pending_orders: list[dict[str, Any]],
         themes: dict[str, Any],
         funds: dict[str, Any],
@@ -78,12 +81,24 @@ class TradingContextBuilder:
             if item.confidence in {DataConfidence.LOW, DataConfidence.UNKNOWN}:
                 blockers.append(f"critical_input_low_confidence:{item.key}")
 
+        holdings_value = sum(
+            max(0.0, float(p.get("market_value") or 0))
+            for p in positions
+        )
+
+        execution_blockers: list[str] = []
+        if cash is None:
+            execution_blockers.append("available_cash_unconfirmed")
+        if peak_equity is None:
+            execution_blockers.append("account_drawdown_unknown")
+
         base = {
             "as_of": as_of,
             "data_mode": data_mode,
             "market_dates": market_dates,
             "positions": positions,
             "cash": cash,
+            "holdings_value": holdings_value,
             "equity": equity,
             "peak_equity": peak_equity,
             "pending_orders": pending_orders,
@@ -95,6 +110,8 @@ class TradingContextBuilder:
             "status": "incomplete" if blockers else "complete",
             "formally_actionable": not blockers,
             "blockers": tuple(dict.fromkeys(blockers)),
+            "execution_ready": not execution_blockers,
+            "execution_blockers": tuple(dict.fromkeys(execution_blockers)),
         }
         canonical = json.dumps(
             _jsonable(base), ensure_ascii=False, sort_keys=True, separators=(",", ":")

@@ -52,9 +52,9 @@ class SessionCreateRequest(BaseModel):
     data_mode: Literal["live", "demo"] = "live"
     market_dates: dict[str, str]
     positions: list[dict[str, Any]]
-    cash: float = Field(ge=0)
-    equity: float = Field(gt=0)
-    peak_equity: float = Field(gt=0)
+    cash: float | None = Field(default=None, ge=0)
+    equity: float | None = Field(default=None, gt=0)
+    peak_equity: float | None = Field(default=None, gt=0)
     pending_orders: list[dict[str, Any]] = Field(default_factory=list)
     themes: dict[str, Any] = Field(default_factory=dict)
     funds: dict[str, Any] = Field(default_factory=dict)

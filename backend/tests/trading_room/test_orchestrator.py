@@ -248,6 +248,37 @@ def test_recorder_cannot_invent_action_and_chair_cannot_exceed_guarded_range():
     )
     assert validate_recorder_memo(invented, source_memos={"buy": source}) is False
 
+
+def test_unknown_cash_and_peak_allow_analysis_but_not_execution():
+    snapshot = TradingContextBuilder.build(
+        as_of=NOW,
+        data_mode="live",
+        market_dates={"CN": "2026-07-14"},
+        positions=[{"symbol": "001513", "market_value": 20_000}],
+        cash=None,
+        equity=None,
+        peak_equity=None,
+        pending_orders=[],
+        themes={},
+        funds={},
+        policy_version_id="policy-ready",
+        skill_versions={},
+        critical_inputs=[CriticalDataInput(
+            key="portfolio", source="yangjibao", as_of=NOW,
+            confidence=DataConfidence.HIGH, is_mock=False, stale=False,
+        )],
+    )
+
+    assert snapshot.status == "complete"
+    assert snapshot.formally_actionable is True
+    assert snapshot.holdings_value == 20_000
+    assert snapshot.equity is None
+    assert snapshot.execution_ready is False
+    assert snapshot.execution_blockers == (
+        "available_cash_unconfirmed", "account_drawdown_unknown",
+    )
+
+
     chair = ChairMemo(
         summary="主持", evidence_refs=["ev_1"], action_class=ActionClass.IMMEDIATE,
         guarded_range=DecisionRange(minimum=1_000, maximum=3_000),
