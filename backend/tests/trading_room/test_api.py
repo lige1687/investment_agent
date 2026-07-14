@@ -531,3 +531,19 @@ async def test_empty_server_portfolio_returns_409(client, monkeypatch):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "synced_portfolio_empty"
+
+
+@pytest.mark.asyncio
+async def test_current_policy_returns_latest_ready_version(client):
+    first = await _import_policy(client, [])
+    assert first["ready"] is False
+
+    targets = [{"scope": "theme", "key": "通信", "target_pct": 0.25}]
+    ready = await _import_policy(client, targets)
+    assert ready["ready"] is True
+
+    current = await client.get("/api/v1/agent/trading-policy")
+    assert current.status_code == 200
+    body = current.json()
+    assert body["version_id"] == ready["version_id"]
+    assert body["ready"] is True

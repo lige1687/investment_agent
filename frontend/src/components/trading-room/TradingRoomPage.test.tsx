@@ -317,3 +317,22 @@ describe('TradingRoomPage progressive inputs', () => {
     expect(screen.getByText(/按无在途买入、今日未申购计算/)).toBeInTheDocument()
   })
 })
+
+describe('TradingRoomPage policy persistence', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('keeps confirmed targets across reloads and edits only on request', async () => {
+    vi.mocked(tradingRoomApi.getCurrentPolicy).mockResolvedValue(readyPolicy)
+    vi.mocked(portfolioApi.getPortfolio as any).mockResolvedValue({ data: syncedPortfolio })
+
+    render(<TradingRoomPage />)
+
+    expect(await screen.findByText(/通信 25%/)).toBeInTheDocument()
+    expect(screen.queryByText('还需确认目标仓位')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('目标仓位 1')).not.toBeInTheDocument()
+    expect(tradingRoomApi.importPolicy).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '调整策略' }))
+    expect(screen.getByLabelText('目标仓位 1')).toHaveValue('25')
+  })
+})

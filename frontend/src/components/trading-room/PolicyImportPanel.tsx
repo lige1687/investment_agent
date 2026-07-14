@@ -11,13 +11,18 @@ interface Props {
 }
 
 export default function PolicyImportPanel({ policy, loading, onImport }: Props) {
-  const [targets, setTargets] = useState<TargetAllocation[]>([
-    { scope: 'theme', key: '通信', target_pct: 0.25 },
-    { scope: 'theme', key: '纳斯达克', target_pct: 0.25 },
-    { scope: 'theme', key: '全球基金', target_pct: 0.2 },
-  ])
+  const [editing, setEditing] = useState(false)
+  const [targets, setTargets] = useState<TargetAllocation[]>(() =>
+    policy.target_allocations.length > 0
+      ? policy.target_allocations.map(t => ({ ...t }))
+      : [
+        { scope: 'theme', key: '通信', target_pct: 0.25 },
+        { scope: 'theme', key: '纳斯达克', target_pct: 0.25 },
+        { scope: 'theme', key: '全球基金', target_pct: 0.2 },
+      ],
+  )
 
-  if (policy.ready) {
+  if (policy.ready && !editing) {
     return (
       <Card size="small" title="当前交易政策">
         <Space wrap>
@@ -28,20 +33,24 @@ export default function PolicyImportPanel({ policy, loading, onImport }: Props) 
               {item.key} {(item.target_pct * 100).toFixed(0)}%
             </Text>
           ))}
+          <Button type="link" onClick={() => setEditing(true)}>查看策略</Button>
+          <Button type="link" onClick={() => setEditing(true)}>调整策略</Button>
         </Space>
       </Card>
     )
   }
 
   return (
-    <Card title="还需确认目标仓位" size="small">
-      <Alert
-        type="warning"
-        showIcon
-        message="默认中线题材模板已载入"
-        description="止损优先级、账户回撤阈值和机会分数都已有初始值；现在只确认题材目标仓位，不会像查户口一样逐项追问。"
-        style={{ marginBottom: 12 }}
-      />
+    <Card title={editing ? '调整目标仓位' : '还需确认目标仓位'} size="small">
+      {!editing && (
+        <Alert
+          type="warning"
+          showIcon
+          message="默认中线题材模板已载入"
+          description="止损优先级、账户回撤阈值和机会分数都已有初始值；现在只确认题材目标仓位，不会像查户口一样逐项追问。"
+          style={{ marginBottom: 12 }}
+        />
+      )}
       <Space direction="vertical" style={{ width: '100%' }}>
         {targets.map((target, index) => (
           <Space key={index} wrap>
@@ -69,7 +78,10 @@ export default function PolicyImportPanel({ policy, loading, onImport }: Props) 
           type="primary"
           loading={loading}
           disabled={targets.some(item => !item.key || item.target_pct <= 0)}
-          onClick={() => onImport?.(targets)}
+          onClick={() => {
+            onImport?.(targets)
+            if (policy.ready) setEditing(false)
+          }}
         >
           确认目标仓位
         </Button>
