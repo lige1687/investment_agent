@@ -106,12 +106,14 @@ class YangjibaoService:
         total_cost = sum(p.cost_basis or (p.shares * p.avg_cost) for p in positions)
         total_pnl = total_value - total_cost
 
+        synced_at = max((p.updated_at for p in positions if p.updated_at), default=None)
         return {
             "connected": await self._get_stored_token() is not None,
             "total_value": total_value,
             "total_cost": total_cost,
             "total_pnl": total_pnl,
             "total_pnl_pct": (total_pnl / total_cost * 100) if total_cost > 0 else 0,
+            "synced_at": synced_at.isoformat() if synced_at else None,
             "positions": [
                 {
                     "symbol": p.symbol,

@@ -12,6 +12,7 @@ from app.models.yangjibao import YangjibaoToken
 from app.models.agent_context import AgentContextSnapshot
 from app.models.evidence import Evidence, StoredDecision, GuardianRun
 from app.models.trading_room import (
+    AccountValuationSnapshotRecord,
     FundExposureSnapshotRecord,
     FundTradeStatusSnapshotRecord,
     PolicyChangeProposalRecord,
@@ -37,6 +38,7 @@ __all__ = [
     "Evidence", "StoredDecision", "GuardianRun",
     "TradingPolicyVersion", "TradingRoomSession", "SpecialistMemoRecord",
     "TradingRoomMessageRecord", "PolicyChangeProposalRecord",
+    "AccountValuationSnapshotRecord",
     "FundExposureSnapshotRecord", "FundTradeStatusSnapshotRecord",
     "TradingRoomFundingConfirmationRecord",
 ]

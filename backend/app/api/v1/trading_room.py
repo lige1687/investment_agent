@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.llm.registry import llm_credentials_configured
+from app.services.yangjibao_service import YangjibaoService
+from app.trading_room.account_valuation import AccountValuationService
 from app.trading_room.context import CriticalDataInput, TradingContextBuilder
 from app.trading_room.announcement_provider import (
     AnnouncementProviderError,
@@ -51,13 +53,7 @@ class SessionCreateRequest(BaseModel):
     as_of: datetime
     data_mode: Literal["live", "demo"] = "live"
     market_dates: dict[str, str]
-    positions: list[dict[str, Any]]
-    cash: float | None = Field(default=None, ge=0)
-    equity: float | None = Field(default=None, gt=0)
-    peak_equity: float | None = Field(default=None, gt=0)
-    pending_orders: list[dict[str, Any]] = Field(default_factory=list)
     themes: dict[str, Any] = Field(default_factory=dict)
-    funds: dict[str, Any] = Field(default_factory=dict)
     skill_versions: dict[str, str] = Field(default_factory=dict)
     critical_inputs: list[CriticalDataInput]
     exposure_snapshots: list[dict[str, Any]] = Field(default_factory=list)
@@ -147,20 +143,55 @@ async def create_session(
     if policy_row is None:
         raise HTTPException(status_code=404, detail="unknown policy version")
 
+    # Read positions from server-side synced portfolio.
+    portfolio = await YangjibaoService(db).get_local_portfolio()
+    positions = portfolio["positions"]
+    funds = {item["symbol"]: {"name": item["name"]} for item in positions}
+
+    if request.data_mode == "live" and not positions:
+        raise HTTPException(status_code=409, detail="synced_portfolio_empty")
+
+    synced_at = (
+        datetime.fromisoformat(portfolio["synced_at"])
+        if portfolio.get("synced_at")
+        else None
+    )
+
+    # Build critical_inputs with server-side portfolio confidence.
+    critical_inputs = [
+        item for item in request.critical_inputs if item.key != "portfolio"
+    ]
+    critical_inputs.append(CriticalDataInput(
+        key="portfolio",
+        source="yangjibao",
+        as_of=synced_at,
+        confidence=(
+            "HIGH" if portfolio.get("connected") and portfolio.get("synced_at")
+            else "UNKNOWN"
+        ),
+        is_mock=False,
+        stale=(
+            synced_at is None
+            or synced_at.date() < request.as_of.date()
+        ),
+    ))
+
+    peak_equity = await AccountValuationService(db).recent_peak(as_of=request.as_of)
+
     context = TradingContextBuilder.build(
         as_of=request.as_of,
         data_mode=request.data_mode,
         market_dates=request.market_dates,
-        positions=request.positions,
-        cash=request.cash,
-        equity=request.equity,
-        peak_equity=request.peak_equity,
-        pending_orders=request.pending_orders,
+        positions=positions,
+        cash=None,
+        equity=None,
+        peak_equity=peak_equity,
+        pending_orders=[],
         themes=request.themes,
-        funds=request.funds,
+        funds=funds,
         policy_version_id=request.policy_version_id,
         skill_versions=request.skill_versions,
-        critical_inputs=request.critical_inputs,
+        critical_inputs=critical_inputs,
     )
     session = await store.create_session(
         policy_version_id=request.policy_version_id,
@@ -173,7 +204,7 @@ async def create_session(
                 session.id, fund_code=fund_code, payload=exposure
             )
     trade_statuses = (
-        await _collect_server_preflights(request)
+        await _collect_server_preflights(request, positions, funds)
         if request.start_discussion
         else request.trade_status_snapshots
     )
@@ -236,15 +267,19 @@ async def _query_preflight(request: PreflightRequest) -> dict[str, Any]:
 
 async def _collect_server_preflights(
     request: SessionCreateRequest,
+    positions: list[dict[str, Any]] | None = None,
+    funds: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Replace browser-supplied status with fresh server-side announcement reads."""
+    src_positions = positions if positions is not None else []
+    src_funds = funds if funds is not None else {}
     fund_positions: list[tuple[str, str, str]] = []
-    for position in request.positions:
+    for position in src_positions:
         symbol = str(position.get("symbol") or position.get("fund_code") or "")
         position_type = str(position.get("type") or position.get("position_type") or "")
         if not symbol or (position_type and position_type != "fund"):
             continue
-        fund_data = request.funds.get(symbol, {})
+        fund_data = src_funds.get(symbol, {})
         name = str(
             position.get("name")
             or (fund_data.get("name") if isinstance(fund_data, dict) else "")
@@ -380,13 +415,7 @@ async def finalize_session(
                 guard_inputs=effective_guard_inputs,
             )
     else:
-        effective_guard_inputs = _guard_inputs_from_context(
-            context=context,
-            policy=policy,
-            fund_code=effective_preflight.fund_code,
-            execution_funding=None,
-        )
-        if effective_guard_inputs is not None and classified is not ActionClass.WATCH:
+        if classified is not ActionClass.WATCH:
             raise HTTPException(
                 status_code=409,
                 detail="available_cash_confirmation_required",

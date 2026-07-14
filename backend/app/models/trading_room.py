@@ -143,6 +143,17 @@ class FundTradeStatusSnapshotRecord(Base):
     session: Mapped[TradingRoomSession] = relationship(back_populates="trade_status_snapshots")
 
 
+class AccountValuationSnapshotRecord(Base):
+    __tablename__ = "account_valuation_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    holdings_value: Mapped[float] = mapped_column(Float, nullable=False)
+    cash: Mapped[float | None] = mapped_column(Float, nullable=True)
+    equity: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+
 class TradingRoomFundingConfirmationRecord(Base):
     __tablename__ = "trading_room_funding_confirmations"
 

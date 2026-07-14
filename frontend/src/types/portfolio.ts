@@ -59,5 +59,6 @@ export interface YangjibaoPortfolioResponse {
   total_cost: number
   total_pnl: number
   total_pnl_pct: number
+  synced_at: string | null
   positions: YangjibaoPortfolioPosition[]
 }

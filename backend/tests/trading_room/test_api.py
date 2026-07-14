@@ -14,9 +14,26 @@ from app.main import app
 NOW = datetime.now(timezone.utc)
 
 
+async def _default_fake_portfolio(self):
+    return {
+        "connected": True,
+        "total_value": 20_000,
+        "synced_at": NOW.isoformat(),
+        "positions": [{
+            "symbol": "001513", "name": "易方达信息产业混合A",
+            "type": "fund", "market_value": 20_000,
+        }],
+    }
+
+
 @pytest_asyncio.fixture
-async def client():
+async def client(monkeypatch):
     from app import models as _models  # noqa: F401
+
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        _default_fake_portfolio,
+    )
 
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:", connect_args={"check_same_thread": False}
@@ -52,13 +69,7 @@ def _session_payload(policy_version_id, *, preflight_status="OPEN", channel_conf
         "as_of": NOW.isoformat(),
         "data_mode": "live",
         "market_dates": {"CN": "2026-07-13", "US": "2026-07-10"},
-        "positions": [{"fund_code": "001513", "market_value": 20000}],
-        "cash": 50000,
-        "equity": 100000,
-        "peak_equity": 102000,
-        "pending_orders": [],
         "themes": {"通信": {"phase": "startup"}},
-        "funds": {"001513": {"nav_as_of": "2026-07-10"}},
         "skill_versions": {"batch-trading-router": "hash-1"},
         "critical_inputs": [
             {
@@ -215,14 +226,21 @@ async def test_unknown_preflight_returns_non_executable_without_guarded_amount(c
 
 
 @pytest.mark.asyncio
-async def test_invalid_final_amount_returns_422_and_feedback_persists(client):
+async def test_invalid_final_amount_returns_422_and_feedback_persists(client, monkeypatch):
+    async def fake_portfolio(self):
+        return {
+            "connected": True, "total_value": 50_000,
+            "synced_at": NOW.isoformat(),
+            "positions": [{"symbol": "003095", "name": "其他基金", "type": "fund", "market_value": 50_000}],
+        }
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        fake_portfolio,
+    )
     policy = await _import_policy(
         client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
     )
-    # Use a different position so current_value=0 for 001513,
-    # making the guard produce a valid guarded_range.
     payload = _session_payload(policy["version_id"])
-    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
     session = (
         await client.post(
             "/api/v1/agent/trading-room/sessions",
@@ -361,14 +379,21 @@ async def test_live_session_replaces_client_trade_status_with_server_preflight(
 
 
 @pytest.mark.asyncio
-async def test_finalize_recomputes_cash_and_allocation_from_immutable_context(client):
+async def test_finalize_recomputes_cash_and_allocation_from_immutable_context(client, monkeypatch):
+    async def fake_portfolio(self):
+        return {
+            "connected": True, "total_value": 50_000,
+            "synced_at": NOW.isoformat(),
+            "positions": [{"symbol": "003095", "name": "其他基金", "type": "fund", "market_value": 50_000}],
+        }
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        fake_portfolio,
+    )
     policy = await _import_policy(
         client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
     )
-    # No existing 001513 position; server uses execution_funding.available_cash
-    # (500) + holdings_value → small equity → available_cash limits below minimum.
     payload = _session_payload(policy["version_id"])
-    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
     session = (
         await client.post("/api/v1/agent/trading-room/sessions", json=payload)
     ).json()
@@ -410,14 +435,21 @@ async def test_funding_required_for_finalize(client):
 
 
 @pytest.mark.asyncio
-async def test_client_cannot_fake_equity_or_target(client):
+async def test_client_cannot_fake_equity_or_target(client, monkeypatch):
+    async def fake_portfolio(self):
+        return {
+            "connected": True, "total_value": 50_000,
+            "synced_at": NOW.isoformat(),
+            "positions": [{"symbol": "003095", "name": "其他基金", "type": "fund", "market_value": 50_000}],
+        }
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        fake_portfolio,
+    )
     policy = await _import_policy(
         client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
     )
-    # Remove 001513 from positions so current_value=0 for that fund,
-    # making available_cash (500) the binding cap below suggested minimum.
     payload = _session_payload(policy["version_id"])
-    payload["positions"] = [{"fund_code": "003095", "market_value": 50_000}]
     session = (
         await client.post(
             "/api/v1/agent/trading-room/sessions", json=payload,
@@ -438,3 +470,64 @@ async def test_client_cannot_fake_equity_or_target(client):
     decision = response.json()["decision"]
     assert decision["guarded_range"] is None
     assert "available_cash" in decision["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_session_uses_server_synced_portfolio(client, monkeypatch):
+    async def fake_portfolio(self):
+        return {
+            "connected": True,
+            "total_value": 20_000,
+            "synced_at": NOW.isoformat(),
+            "positions": [{
+                "symbol": "001513", "name": "易方达信息产业混合A",
+                "type": "fund", "market_value": 20_000,
+            }],
+        }
+
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        fake_portfolio,
+    )
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}],
+    )
+    payload = _session_payload(policy["version_id"])
+    for key in ("positions", "cash", "equity", "peak_equity", "pending_orders", "funds"):
+        payload.pop(key, None)
+
+    response = await client.post("/api/v1/agent/trading-room/sessions", json=payload)
+
+    assert response.status_code == 200
+    context = response.json()["context"]
+    assert context["positions"][0]["symbol"] == "001513"
+    assert context["holdings_value"] == 20_000
+    assert context["cash"] is None
+    assert context["equity"] is None
+
+
+@pytest.mark.asyncio
+async def test_empty_server_portfolio_returns_409(client, monkeypatch):
+    async def fake_portfolio(self):
+        return {
+            "connected": True,
+            "total_value": 0,
+            "synced_at": NOW.isoformat(),
+            "positions": [],
+        }
+
+    monkeypatch.setattr(
+        "app.services.yangjibao_service.YangjibaoService.get_local_portfolio",
+        fake_portfolio,
+    )
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}],
+    )
+    payload = _session_payload(policy["version_id"])
+    for key in ("positions", "cash", "equity", "peak_equity", "pending_orders", "funds"):
+        payload.pop(key, None)
+
+    response = await client.post("/api/v1/agent/trading-room/sessions", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "synced_portfolio_empty"
