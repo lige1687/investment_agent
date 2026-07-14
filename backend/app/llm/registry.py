@@ -151,6 +151,11 @@ class LLMRegistry:
 _registry = LLMRegistry()
 
 
+def llm_credentials_configured(role: Optional[str] = None) -> bool:
+    """Return True when the resolved config for `role` has a non-empty api_key."""
+    return bool(_resolve_config(role).api_key.strip())
+
+
 def get_llm_client(role: Optional[str] = None) -> LLMClient:
     """Return the LLMClient configured for `role` (or default if role is None).
 

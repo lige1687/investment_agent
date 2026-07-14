@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.llm.registry import llm_credentials_configured
 from app.trading_room.context import CriticalDataInput, TradingContextBuilder
 from app.trading_room.announcement_provider import (
     AnnouncementProviderError,
@@ -414,7 +415,7 @@ async def record_action(
 
 
 async def _run_discussion(store, session_id, context) -> None:
-    if not settings.llm_api_key:
+    if not llm_credentials_configured("chair"):
         await store.add_message(
             session_id,
             sender_role="system",

@@ -55,6 +55,15 @@ def test_trading_room_roles_resolve_current_deepseek_model(monkeypatch):
         assert config.model not in {"deepseek-chat", "deepseek-reasoner"}
 
 
+def test_trading_room_credential_check_uses_role_specific_key(monkeypatch):
+    from app.llm.registry import llm_credentials_configured
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    monkeypatch.setattr(settings, "trading_room_llm_api_key", "room-secret")
+
+    assert llm_credentials_configured("chair") is True
+
+
 def test_trading_room_roles_use_their_own_credentials(monkeypatch):
     assert "trading_room_llm_api_key" in type(settings).model_fields
     assert "trading_room_llm_base_url" in type(settings).model_fields
