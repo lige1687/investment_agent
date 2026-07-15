@@ -6,14 +6,15 @@ import {
 import {
   SendOutlined, RobotOutlined, UserOutlined,
   ThunderboltOutlined, SearchOutlined, WalletOutlined,
-  AlertOutlined, LineChartOutlined,
+  AlertOutlined, LineChartOutlined, ClearOutlined,
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import { agentApi } from '@/api/agent'
+import PageContainer from '@/components/layout/PageContainer'
 import type { ChatMessage, ToolCall } from '@/types/agent'
 import DecisionCardView from './DecisionCardView'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 const SESSION_KEY = 'fund_agent_session_id'
@@ -114,28 +115,29 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div style={{ maxWidth: 920, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Title level={4} style={{ margin: 0 }}>
+    <PageContainer
+      title={
+        <Space>
           <RobotOutlined /> AI 投资助手
-          {loading && <Spin size="small" style={{ marginLeft: 8 }} />}
-        </Title>
+          {loading && <Spin size="small" />}
+        </Space>
+      }
+      subtitle="基于市场数据和持仓的智能分析"
+      extra={
         <Space size={4}>
           {sessionId && (
             <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>
               session: {sessionId.slice(0, 20)}
             </Text>
           )}
-          <Button size="small" onClick={resetSession}>新会话</Button>
+          <Button icon={<ClearOutlined />} onClick={resetSession}>新会话</Button>
         </Space>
-      </div>
-
+      }
+    >
       {/* Chat area */}
       <div style={{
         height: 'calc(100vh - 280px)',
         overflowY: 'auto',
-        marginTop: 12,
-        marginBottom: 16,
         padding: '0 4px',
       }}>
         {messages.map((msg, idx) => (
@@ -266,7 +268,7 @@ export default function AgentChatPage() {
           发送
         </Button>
       </div>
-    </div>
+    </PageContainer>
   )
 }
 

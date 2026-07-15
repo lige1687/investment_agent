@@ -39,6 +39,7 @@ class LLMConfig:
     api_key: str
     base_url: str
     timeout: float
+    auth_token: str = ""
 
 
 def _resolve_config(role: Optional[str]) -> LLMConfig:
@@ -69,6 +70,7 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
         base_url = default_base
 
     # Anthropic legacy fields — populate empty defaults from the older config keys
+    auth_token = ""
     if provider.lower() == "anthropic":
         if not api_key:
             api_key = settings.anthropic_api_key
@@ -76,6 +78,9 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
             model = settings.anthropic_model
         if not base_url:
             base_url = settings.anthropic_base_url
+        # ark (and other Bearer-token proxies) authenticate via auth_token,
+        # not x-api-key. Carry it so the credential gate and client both see it.
+        auth_token = settings.anthropic_auth_token
 
     if provider.lower() == "deepseek" and model in DEPRECATED_DEEPSEEK_MODELS:
         raise LLMError(
@@ -88,6 +93,7 @@ def _resolve_config(role: Optional[str]) -> LLMConfig:
         api_key=api_key,
         base_url=base_url,
         timeout=settings.llm_timeout_seconds,
+        auth_token=auth_token,
     )
 
 
@@ -124,7 +130,7 @@ class LLMRegistry:
                 api_key=cfg.api_key,
                 base_url=cfg.base_url,
                 timeout=cfg.timeout,
-                auth_token=settings.anthropic_auth_token,
+                auth_token=cfg.auth_token,
             )
         if p in OPENAI_COMPAT_PROVIDERS:
             return OpenAICompatClient(
@@ -152,8 +158,13 @@ _registry = LLMRegistry()
 
 
 def llm_credentials_configured(role: Optional[str] = None) -> bool:
-    """Return True when the resolved config for `role` has a non-empty api_key."""
-    return bool(_resolve_config(role).api_key.strip())
+    """Return True when the resolved config for `role` has a usable credential.
+
+    A credential is either an api_key (x-api-key) or an auth_token (Bearer) -
+    the latter is how ark and other Bearer-token proxies authenticate.
+    """
+    cfg = _resolve_config(role)
+    return bool(cfg.api_key.strip() or cfg.auth_token.strip())
 
 
 def get_llm_client(role: Optional[str] = None) -> LLMClient:

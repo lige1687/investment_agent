@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from typing import Any, Literal
@@ -16,7 +17,11 @@ from app.database import get_db
 from app.llm.registry import llm_credentials_configured
 from app.services.yangjibao_service import YangjibaoService
 from app.trading_room.account_valuation import AccountValuationService
-from app.trading_room.context import CriticalDataInput, TradingContextBuilder
+from app.trading_room.context import (
+    CriticalDataInput,
+    TradingContextBuilder,
+    compute_holdings_value,
+)
 from app.trading_room.announcement_provider import (
     AnnouncementProviderError,
     IwencaiAnnouncementProvider,
@@ -197,6 +202,12 @@ async def create_session(
         policy_version_id=request.policy_version_id,
         context_snapshot=context.model_dump(mode="json"),
     )
+    if request.data_mode == "live":
+        await AccountValuationService(db).record_unconfirmed(
+            session_id=session.id,
+            holdings_value=context.holdings_value,
+            captured_at=request.as_of,
+        )
     for exposure in request.exposure_snapshots:
         fund_code = str(exposure.get("fund_code") or "")
         if fund_code:
@@ -288,26 +299,29 @@ async def _collect_server_preflights(
         share_class = "C" if name.strip().endswith("C") else "A"
         fund_positions.append((symbol, name, share_class))
 
-    results: list[dict[str, Any]] = []
+    unique_positions: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str]] = set()
     for symbol, name, share_class in fund_positions[:8]:
         key = (symbol, share_class)
         if key in seen:
             continue
         seen.add(key)
-        results.append(
-            await _query_preflight(
-                PreflightRequest(
-                    fund_code=symbol,
-                    fund_name=name,
-                    share_class=share_class,
-                    customer_scope="retail",
-                    channel=request.execution_channel,
-                    channel_confirmed=False,
-                )
+        unique_positions.append((symbol, name, share_class))
+
+    results = await asyncio.gather(*(
+        _query_preflight(
+            PreflightRequest(
+                fund_code=symbol,
+                fund_name=name,
+                share_class=share_class,
+                customer_scope="retail",
+                channel=request.execution_channel,
+                channel_confirmed=False,
             )
         )
-    return results
+        for symbol, name, share_class in unique_positions
+    ))
+    return list(results)
 
 
 @router.get("/trading-room/sessions/{session_id}")
@@ -393,6 +407,24 @@ async def finalize_session(
             consumed_purchase_today=funding.consumed_purchase_today,
             confirmed_at=now,
         )
+        if context.get("data_mode") == "live":
+            portfolio_input = next(
+                (item for item in context.get("critical_inputs") or []
+                 if isinstance(item, dict) and item.get("key") == "portfolio"),
+                None,
+            )
+            trusted = (
+                portfolio_input is not None
+                and portfolio_input.get("confidence") == "HIGH"
+                and not portfolio_input.get("stale")
+            )
+            await AccountValuationService(db).record_confirmed(
+                session_id=session_id,
+                holdings_value=float(context.get("holdings_value") or 0),
+                cash=funding.available_cash,
+                captured_at=now,
+                confidence="HIGH" if trusted else "MEDIUM",
+            )
         effective_guard_inputs = _guard_inputs_from_context(
             context=context,
             policy=policy,
@@ -746,11 +778,7 @@ def _guard_inputs_from_context(
     if target is None:
         return None
 
-    holdings_value = sum(
-        max(0.0, float(p.get("market_value") or 0))
-        for p in (context.get("positions") or [])
-        if isinstance(p, dict)
-    )
+    holdings_value = compute_holdings_value(context.get("positions") or [])
 
     if execution_funding is not None:
         account_equity = holdings_value + execution_funding.available_cash

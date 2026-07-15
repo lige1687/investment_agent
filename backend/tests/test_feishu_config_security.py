@@ -42,7 +42,7 @@ async def test_get_config_returns_only_masked_webhook_hint(db_session):
     assert payload["configured"] is True
     assert "webhook_url" not in payload
     assert payload["webhook_hint"].startswith("https://")
-    assert payload["webhook_hint"].endswith("abcd")
+    assert payload["webhook_hint"].endswith("****")
     assert secret not in str(payload)
 
 

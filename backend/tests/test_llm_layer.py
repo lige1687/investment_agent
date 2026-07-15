@@ -348,6 +348,47 @@ def test_registry_unknown_role_falls_back_to_default():
     assert unknown == default
 
 
+def test_registry_auth_token_counts_as_credential(monkeypatch):
+    """ark authenticates with a Bearer auth_token, not an x-api-key. The
+    credential gate must treat a token-only config as configured so the
+    trading-room discussion is not falsely blocked."""
+    from app.config import settings
+    from app.llm.registry import _resolve_config, llm_credentials_configured
+
+    monkeypatch.setattr(settings, "trading_room_llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "trading_room_llm_api_key", "")
+    monkeypatch.setattr(settings, "trading_room_llm_model", "")
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_auth_token", "ark-bearer-token")
+    monkeypatch.setattr(settings, "anthropic_model", "ark-code-latest")
+    monkeypatch.setattr(settings, "anthropic_base_url", "https://ark.example/api/plan")
+
+    cfg = _resolve_config("chair")
+    assert cfg.provider == "anthropic"
+    assert cfg.api_key == ""
+    assert cfg.auth_token == "ark-bearer-token"
+    assert llm_credentials_configured("chair") is True
+
+    # With neither credential, the gate must fail closed.
+    monkeypatch.setattr(settings, "anthropic_auth_token", "")
+    assert llm_credentials_configured("chair") is False
+
+
+def test_anthropic_client_sends_bearer_when_auth_token_set():
+    client = AnthropicClient(model="ark-code-latest", api_key="", auth_token="ark-bearer")
+    headers = client._headers()
+    assert headers["authorization"] == "Bearer ark-bearer"
+    assert "x-api-key" not in headers
+
+
+def test_anthropic_client_falls_back_to_x_api_key():
+    client = AnthropicClient(model="claude-sonnet-4", api_key="sk-fake", auth_token="")
+    headers = client._headers()
+    assert headers["x-api-key"] == "sk-fake"
+    assert "authorization" not in headers
+
+
 # ── Payload build (integration between messages + tools) ──
 
 def test_anthropic_payload_moves_system_out_of_messages():

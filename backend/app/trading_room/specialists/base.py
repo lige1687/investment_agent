@@ -102,7 +102,10 @@ class SpecialistRunner:
                 response = await self.client.chat(
                     messages,
                     temperature=self.temperature,
-                    max_tokens=4096,
+                    # Reasoning models (e.g. ark-code-latest) spend part of this
+                    # budget on a thinking block before the JSON text, so leave
+                    # headroom to avoid mid-output truncation.
+                    max_tokens=8192,
                     response_format={"type": "json_object"},
                 )
                 last_text = response.text

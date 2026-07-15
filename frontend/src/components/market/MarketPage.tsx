@@ -1,15 +1,16 @@
 import { useState, useMemo } from 'react'
-import { Typography, Input, Select, Space, Card } from 'antd'
+import { Input, Select, Space, Card, Button } from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { marketApi } from '@/api/market'
 import { deriveDataState } from '@/api/adapters/market'
 import DataStatePanel from '@/components/common/DataStatePanel'
 import DemoDataBanner from '@/components/common/DemoDataBanner'
+import PageContainer from '@/components/layout/PageContainer'
 import QuoteTable from './QuoteTable'
 import KlineChart from './KlineChart'
 import type { KlineData } from '@/types/market'
 
-const { Title } = Typography
 const { Search } = Input
 
 const DEFAULT_ETFS = ['510050', '510300', '510500', '159915', '588000']
@@ -58,11 +59,18 @@ export default function MarketPage() {
   }
 
   return (
-    <div>
+    <PageContainer
+      title="行情数据"
+      subtitle="ETF、指数与个股行情"
+      size="wide"
+      extra={
+        <Button icon={<ReloadOutlined />} onClick={() => { refetchQuotes(); refetchKline() }}>
+          刷新
+        </Button>
+      }
+    >
       {usesDemoData && <DemoDataBanner />}
-      <Title level={4}>行情数据</Title>
-
-      <Space style={{ marginBottom: 16 }}>
+      <Space wrap style={{ marginBottom: 16 }}>
         <Search
           placeholder="输入代码（多个用逗号分隔），如 510050,159915"
           onSearch={handleSearch}
@@ -77,7 +85,7 @@ export default function MarketPage() {
         </Select>
       </Space>
 
-      <Card title={`📊 ${selectedSymbol} K线图`} style={{ marginBottom: 16 }}>
+      <Card title={`${selectedSymbol} K线图`}>
         <DataStatePanel
           state={klineState}
           meta={klineData?.meta}
@@ -100,6 +108,6 @@ export default function MarketPage() {
           />
         </DataStatePanel>
       </Card>
-    </div>
+    </PageContainer>
   )
 }

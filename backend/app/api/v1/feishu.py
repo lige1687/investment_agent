@@ -34,9 +34,8 @@ def mask_webhook_url(value: str) -> str:
         return ""
     parsed = urlsplit(value)
     host = parsed.netloc or "configured"
-    suffix = value[-4:] if len(value) >= 4 else "****"
     scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
-    return f"{scheme}://{host}/****{suffix}"
+    return f"{scheme}://{host}/****"
 
 
 def should_route_to_sector_detail(message: str) -> bool:

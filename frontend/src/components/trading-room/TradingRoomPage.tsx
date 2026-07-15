@@ -12,6 +12,7 @@ import type {
   TradingRoomSession,
 } from '@/types/tradingRoom'
 import DemoDataBanner from '@/components/common/DemoDataBanner'
+import PageContainer from '@/components/layout/PageContainer'
 import PolicyImportPanel from './PolicyImportPanel'
 import SyncedAccountSummary from './SyncedAccountSummary'
 import ContextSnapshotCard from './ContextSnapshotCard'
@@ -21,8 +22,9 @@ import SpecialistRoundtable from './SpecialistRoundtable'
 import ConflictPanel from './ConflictPanel'
 import DecisionDraftPanel from './DecisionDraftPanel'
 import ExecutionFundingPanel from './ExecutionFundingPanel'
+import SectionHeader from './SectionHeader'
 
-const { Paragraph, Title } = Typography
+const { Paragraph } = Typography
 
 interface ViewProps {
   policy: TradingPolicy
@@ -41,28 +43,49 @@ export function TradingRoomView({
   onImportTargets,
   onConfirm,
 }: ViewProps) {
+  // Compute which stage we are on so the header lights up the right badge.
+  const stage: 1 | 2 | 3 | 4 = !session
+    ? 1
+    : session.final_decision
+      ? 4
+      : session.specialist_memos.length > 0
+        ? 3
+        : 2
+
   return (
-    <Space direction="vertical" size={14} style={{ width: '100%' }}>
-      <PolicyImportPanel policy={policy} loading={policyLoading} onImport={onImportTargets} />
+    <Space direction="vertical" size={20} style={{ width: '100%' }}>
+      <SectionHeader index={1} title="准备" hint="确认策略与账户" active={stage === 1}>
+        <PolicyImportPanel policy={policy} loading={policyLoading} onImport={onImportTargets} />
+      </SectionHeader>
       {session?.context.data_mode === 'demo' && <DemoDataBanner />}
       {session && (
         <>
           {session.messages.filter(item => item.sender_role === 'system').map(item => (
             <Alert key={item.id} type="warning" showIcon message={item.content} />
           ))}
-          <ContextSnapshotCard context={session.context} />
-          <Row gutter={[12, 12]}>
-            <Col xs={24} lg={12}><ExposureCard snapshots={session.exposure_snapshots} /></Col>
-            <Col xs={24} lg={12}><ExecutionStatusCard snapshots={session.trade_status_snapshots} /></Col>
-          </Row>
-          <SpecialistRoundtable memos={session.specialist_memos} />
-          <ConflictPanel memos={session.specialist_memos} />
-          <DecisionDraftPanel
-            decision={session.final_decision}
-            contextActionable={session.context.formally_actionable}
-            onConfirm={onConfirm}
-            submitting={actionLoading}
-          />
+          <SectionHeader index={2} title="上下文" hint="同一时点的账户与市场快照" active={stage === 2}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <ContextSnapshotCard context={session.context} />
+              <Row gutter={[12, 12]}>
+                <Col xs={24} lg={12}><ExposureCard snapshots={session.exposure_snapshots} /></Col>
+                <Col xs={24} lg={12}><ExecutionStatusCard snapshots={session.trade_status_snapshots} /></Col>
+              </Row>
+            </Space>
+          </SectionHeader>
+          <SectionHeader index={3} title="讨论" hint="专家意见与证据质疑" active={stage === 3}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <SpecialistRoundtable memos={session.specialist_memos} />
+              <ConflictPanel memos={session.specialist_memos} />
+            </Space>
+          </SectionHeader>
+          <SectionHeader index={4} title="结论" hint="最终建议与金额确认" active={stage === 4}>
+            <DecisionDraftPanel
+              decision={session.final_decision}
+              contextActionable={session.context.formally_actionable}
+              onConfirm={onConfirm}
+              submitting={actionLoading}
+            />
+          </SectionHeader>
         </>
       )}
     </Space>
@@ -88,6 +111,8 @@ export default function TradingRoomPage() {
     score: number
     suggested: any
   } | null>(null)
+  const [lastConfirmedCash, setLastConfirmedCash] = useState<number | undefined>(undefined)
+  const [lastConfirmedAt, setLastConfirmedAt] = useState<string | null>(null)
 
   const loadPolicy = useCallback(async () => {
     setLoading(true)
@@ -213,6 +238,13 @@ export default function TradingRoomPage() {
           score,
           suggested,
         })
+        // Prefill cash from last confirmed value, but show confirmation time.
+        tradingRoomApi.getLatestFunding().then(({ available_cash, confirmed_at }) => {
+          if (available_cash !== undefined && available_cash !== null) {
+            setLastConfirmedCash(available_cash)
+          }
+          setLastConfirmedAt(confirmed_at)
+        }).catch(() => {})
       }
       setSession(created)
     } catch (reason: any) {
@@ -264,18 +296,12 @@ export default function TradingRoomPage() {
   }
 
   return (
-    <div style={{ maxWidth: 1240, margin: '0 auto' }}>
-      <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-        <div>
-          <Title level={3} style={{ marginBottom: 2 }}><CommentOutlined /> 今日交易讨论室</Title>
-          <Paragraph type="secondary">
-            回答两个核心问题：今天哪些持仓要操作、操作多少；通信、纳斯达克等题材处于什么阶段。
-          </Paragraph>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={loadPolicy}>刷新</Button>
-      </Space>
-
-      {error && <Alert type="error" showIcon message={error} closable onClose={() => setError(null)} style={{ marginBottom: 12 }} />}
+    <PageContainer
+      title={<><CommentOutlined /> 今日交易讨论室</>}
+      subtitle="回答两个核心问题:今天哪些持仓要操作、操作多少;通信、纳斯达克等题材处于什么阶段。"
+      extra={<Button icon={<ReloadOutlined />} onClick={loadPolicy}>刷新</Button>}
+    >
+      {error && <Alert type="error" showIcon message={error} closable onClose={() => setError(null)} />}
       {loading || !policy ? <Spin /> : (
         <>
           <SyncedAccountSummary
@@ -294,23 +320,25 @@ export default function TradingRoomPage() {
             onConfirm={confirmAction}
           />
           {policy.ready && !session && (
-            <Card size="small" style={{ marginTop: 14 }}>
+            <Card size="small">
               <Space wrap>
                 <Button type="primary" icon={<PlayCircleOutlined />} loading={working} onClick={startDiscussion}>
                   开始今日讨论
                 </Button>
-                <span style={{ fontSize: 12, color: '#888' }}>只读分析，不会自动下单</span>
+                <Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>只读分析,不会自动下单</Paragraph>
               </Space>
             </Card>
           )}
           {pendingBuyDecision && (
             <ExecutionFundingPanel
+              lastConfirmedCash={lastConfirmedCash}
+              lastConfirmedAt={lastConfirmedAt}
               onConfirm={handleFundingConfirm}
               loading={working}
             />
           )}
         </>
       )}
-    </div>
+    </PageContainer>
   )
 }

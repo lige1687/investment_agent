@@ -1,11 +1,12 @@
 import { Row, Col, Card, Statistic, Typography, Spin, Empty } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { portfolioApi } from '@/api/portfolio'
+import PageContainer from '@/components/layout/PageContainer'
 import AllocationChart from './AllocationChart'
 import PnLChart from './PnLChart'
 import PositionTable from './PositionTable'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 export default function PortfolioPage() {
   const { data: portfolio, isLoading, isError } = useQuery({
@@ -20,23 +21,21 @@ export default function PortfolioPage() {
   // ── Loading state ──
   if (isLoading) {
     return (
-      <div>
-        <Title level={4}>我的持仓</Title>
+      <PageContainer title="我的持仓" subtitle="养基宝同步的持仓汇总">
         <Card>
           <div style={{ textAlign: 'center', padding: 80 }}>
             <Spin size="large" />
             <div style={{ marginTop: 16, color: '#999' }}>加载持仓数据...</div>
           </div>
         </Card>
-      </div>
+      </PageContainer>
     )
   }
 
   // ── Error / not connected state ──
   if (isError || !portfolio?.connected) {
     return (
-      <div>
-        <Title level={4}>我的持仓</Title>
+      <PageContainer title="我的持仓" subtitle="养基宝同步的持仓汇总">
         <Card>
           <Empty
             description={
@@ -46,113 +45,66 @@ export default function PortfolioPage() {
             }
           />
         </Card>
-      </div>
+      </PageContainer>
     )
   }
 
   const { total_value, total_cost, total_pnl, total_pnl_pct, positions } = portfolio
 
+  const stats = (
+    <Row gutter={[16, 16]}>
+      <Col xs={12} sm={6}>
+        <Card size="small">
+          <Statistic title="总市值" value={total_value} precision={2} prefix="¥" />
+        </Card>
+      </Col>
+      <Col xs={12} sm={6}>
+        <Card size="small">
+          <Statistic title="总成本" value={total_cost} precision={2} prefix="¥" />
+        </Card>
+      </Col>
+      <Col xs={12} sm={6}>
+        <Card size="small">
+          <Statistic
+            title="总盈亏"
+            value={total_pnl}
+            precision={2}
+            prefix="¥"
+            valueStyle={{ color: total_pnl >= 0 ? '#cf1322' : '#3f8600' }}
+          />
+        </Card>
+      </Col>
+      <Col xs={12} sm={6}>
+        <Card size="small">
+          <Statistic
+            title="总收益率"
+            value={total_pnl_pct}
+            precision={2}
+            suffix="%"
+            valueStyle={{ color: total_pnl_pct >= 0 ? '#cf1322' : '#3f8600' }}
+          />
+        </Card>
+      </Col>
+    </Row>
+  )
+
   // ── Empty positions after connected ──
   if (positions.length === 0) {
     return (
-      <div>
-        <Title level={4}>我的持仓</Title>
-
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-          <Col xs={12} sm={6}>
-            <Card size="small">
-              <Statistic title="总市值" value={total_value} precision={2} prefix="¥" />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card size="small">
-              <Statistic title="总成本" value={total_cost} precision={2} prefix="¥" />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card size="small">
-              <Statistic
-                title="总盈亏"
-                value={total_pnl}
-                precision={2}
-                prefix="¥"
-                valueStyle={{ color: total_pnl >= 0 ? '#cf1322' : '#3f8600' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card size="small">
-              <Statistic
-                title="总收益率"
-                value={total_pnl_pct}
-                precision={2}
-                suffix="%"
-                valueStyle={{ color: total_pnl_pct >= 0 ? '#cf1322' : '#3f8600' }}
-              />
-            </Card>
-          </Col>
-        </Row>
-
+      <PageContainer title="我的持仓" subtitle="养基宝同步的持仓汇总">
+        {stats}
         <Card>
           <Empty description="暂无持仓数据" />
         </Card>
-      </div>
+      </PageContainer>
     )
   }
 
   // ── Main portfolio view ──
   return (
-    <div>
-      <Title level={4}>我的持仓</Title>
-
-      {/* ── Summary Cards ── */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="总市值"
-              value={total_value}
-              precision={2}
-              prefix="¥"
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="总成本"
-              value={total_cost}
-              precision={2}
-              prefix="¥"
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="总盈亏"
-              value={total_pnl}
-              precision={2}
-              prefix="¥"
-              valueStyle={{ color: total_pnl >= 0 ? '#cf1322' : '#3f8600' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic
-              title="总收益率"
-              value={total_pnl_pct}
-              precision={2}
-              suffix="%"
-              valueStyle={{ color: total_pnl_pct >= 0 ? '#cf1322' : '#3f8600' }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* ── Position Table ── */}
-      <Card size="small" style={{ marginBottom: 16 }}>
+    <PageContainer title="我的持仓" subtitle="养基宝同步的持仓汇总" size="wide">
+      {stats}
+      <Card size="small">
         <Text strong style={{ display: 'block', marginBottom: 12 }}>
           持仓明细
         </Text>
@@ -161,8 +113,6 @@ export default function PortfolioPage() {
           totalValue={total_value}
         />
       </Card>
-
-      {/* ── Charts Row ── */}
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Card size="small" title="资产配置">
@@ -178,6 +128,6 @@ export default function PortfolioPage() {
           </Card>
         </Col>
       </Row>
-    </div>
+    </PageContainer>
   )
 }

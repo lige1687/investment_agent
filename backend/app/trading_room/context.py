@@ -12,6 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.trading_room.schemas import DataConfidence
 
 
+def compute_holdings_value(positions: list[dict[str, Any]]) -> float:
+    return sum(
+        max(0.0, float(p.get("market_value") or 0))
+        for p in positions
+        if isinstance(p, dict)
+    )
+
+
 class CriticalDataInput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -81,10 +89,7 @@ class TradingContextBuilder:
             if item.confidence in {DataConfidence.LOW, DataConfidence.UNKNOWN}:
                 blockers.append(f"critical_input_low_confidence:{item.key}")
 
-        holdings_value = sum(
-            max(0.0, float(p.get("market_value") or 0))
-            for p in positions
-        )
+        holdings_value = compute_holdings_value(positions)
 
         execution_blockers: list[str] = []
         if cash is None:

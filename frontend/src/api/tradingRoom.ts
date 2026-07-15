@@ -21,7 +21,9 @@ export const tradingRoomApi = {
   }) => (await apiClient.post<TradingPolicy>('/agent/trading-policy/import', payload)).data,
 
   createSession: async (payload: SessionCreatePayload) =>
-    (await apiClient.post<TradingRoomSession>('/agent/trading-room/sessions', payload)).data,
+    (await apiClient.post<TradingRoomSession>(
+      '/agent/trading-room/sessions', payload, { timeout: 300_000 },
+    )).data,
 
   preflight: async (payload: {
     fund_code: string

@@ -22,6 +22,7 @@ import { PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { backtestApi } from '@/api/backtest'
+import PageContainer from '@/components/layout/PageContainer'
 import type { BacktestEvent, BacktestResponse, BacktestTrade, RunPresetPayload } from '@/types/backtest'
 import BacktestLinkedReviewChart from './BacktestLinkedReviewChart'
 
@@ -92,24 +93,21 @@ export default function BacktestPage() {
   const metrics = result?.metrics
 
   return (
-    <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
-        <Col>
-          <Title level={4} style={{ margin: 0 }}>策略回测</Title>
-          <Text type="secondary">基金净值曲线上的买卖点、账户曲线和每次动作原因</Text>
-        </Col>
-        <Col>
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => form.resetFields()}>
-              重置
-            </Button>
-            <Button type="primary" icon={<PlayCircleOutlined />} loading={running} onClick={runBacktest}>
-              跑策略
-            </Button>
-          </Space>
-        </Col>
-      </Row>
-
+    <PageContainer
+      title="策略回测"
+      subtitle="基金净值曲线上的买卖点、账户曲线和每次动作原因"
+      size="wide"
+      extra={
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={() => form.resetFields()}>
+            重置
+          </Button>
+          <Button type="primary" icon={<PlayCircleOutlined />} loading={running} onClick={runBacktest}>
+            跑策略
+          </Button>
+        </Space>
+      }
+    >
       <Form
         form={form}
         layout="vertical"
@@ -297,7 +295,7 @@ export default function BacktestPage() {
       >
         {selected ? <TradeDetail trade={selected.trade} event={selected.event} /> : null}
       </Drawer>
-    </div>
+    </PageContainer>
   )
 }
 

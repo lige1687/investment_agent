@@ -12,6 +12,7 @@ import { marketApi } from '@/api/market'
 import { deriveDataState } from '@/api/adapters/market'
 import DataStatePanel from '@/components/common/DataStatePanel'
 import DemoDataBanner from '@/components/common/DemoDataBanner'
+import PageContainer from '@/components/layout/PageContainer'
 import {
   DEFAULT_INDICES, AVAILABLE_INDICES,
   type IndexConfig, type IndexData,
@@ -93,27 +94,23 @@ export default function DashboardPage() {
   }
 
   return (
-    <div>
+    <PageContainer
+      title="市场概览"
+      subtitle="全球指数、市场情绪、资金流向与板块轮动"
+      extra={(
+        <>
+          <Button icon={<ReloadOutlined />} onClick={() => { refetchIndices() }}>
+            刷新行情
+          </Button>
+          <Button icon={<SettingOutlined />} onClick={() => setShowConfig(true)}>
+            配置指数
+          </Button>
+        </>
+      )}
+    >
       {usesDemoData && <DemoDataBanner />}
-      {/* ── Header ── */}
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
-        <Col>
-          <Title level={4} style={{ margin: 0 }}>市场概览</Title>
-        </Col>
-        <Col>
-          <Space>
-            <Button icon={<ReloadOutlined />} size="small" onClick={() => { refetchIndices() }}>
-              刷新行情
-            </Button>
-            <Button icon={<SettingOutlined />} size="small" onClick={() => setShowConfig(true)}>
-              配置指数
-            </Button>
-          </Space>
-        </Col>
-      </Row>
-
       {/* ── 🌍 Global Index Cards ── */}
-      <Card size="small" style={{ marginBottom: 16 }}>
+      <Card size="small">
         <DataStatePanel
           state={indicesState}
           meta={indicesData?.meta}
@@ -364,6 +361,6 @@ export default function DashboardPage() {
           </Row>
         </Checkbox.Group>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }

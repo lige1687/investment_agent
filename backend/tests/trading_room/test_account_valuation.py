@@ -1,6 +1,6 @@
 """Account valuation snapshot and recent peak tests."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -45,3 +45,18 @@ async def test_confirmed_snapshot_in_peak(service):
 @pytest.mark.asyncio
 async def test_no_history_returns_none(service):
     assert await service.recent_peak(as_of=NOW) is None
+
+
+@pytest.mark.asyncio
+async def test_timezone_normalized_before_compare(service):
+    # Recorded with a +08:00 wall clock that is the SAME instant as NOW (14:30 UTC).
+    # Without UTC normalization the stored 22:30 wall clock would exceed the
+    # 14:30 query upper bound and be wrongly excluded (the 8-hour skew bug).
+    shanghai = timezone(timedelta(hours=8))
+    captured_at = datetime(2026, 7, 14, 22, 30, tzinfo=shanghai)
+    await service.record_confirmed(
+        session_id="s1", holdings_value=80_000, cash=20_000,
+        captured_at=captured_at, confidence="HIGH",
+    )
+
+    assert await service.recent_peak(as_of=NOW) == 100_000

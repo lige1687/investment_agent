@@ -13,6 +13,7 @@ import { marketApi } from '@/api/market'
 import { deriveDataState } from '@/api/adapters/market'
 import DataStatePanel from '@/components/common/DataStatePanel'
 import DemoDataBanner from '@/components/common/DemoDataBanner'
+import PageContainer from '@/components/layout/PageContainer'
 import type { SectorRankingItem } from '@/types/market'
 
 const { Title, Text } = Typography
@@ -390,126 +391,115 @@ export default function SectorRankingBoard() {
   ]
 
   return (
-    <div>
+    <PageContainer
+      title="版块监控"
+      subtitle="申万一级行业评分、涨跌与资金流向"
+      size="wide"
+      extra={<Button icon={<ReloadOutlined />} onClick={() => { refetch() }}>刷新</Button>}
+    >
       {rankingData?.meta.isMock && <DemoDataBanner />}
-      {/* 页面标题 */}
-      <Row justify="space-between" align="middle" style={{ marginBottom: 20 }}>
-        <Col>
-          <Title level={3} style={{ margin: 0 }}>📊 版块监控看板</Title>
-        </Col>
-        <Col>
-          <Space>
-            <Button icon={<ReloadOutlined />} size="small" onClick={() => { refetch() }}>
-              刷新
-            </Button>
-          </Space>
-        </Col>
-      </Row>
-
       <DataStatePanel
         state={rankingState}
         meta={rankingData?.meta}
         onRetry={() => { refetch() }}
       >
-      <div>
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
-          <Card size="small">
-            <Statistic
-              title="🔥 强势信号"
-              value={statsData.strong}
-              prefix={<span style={{ color: '#cf1322' }}>🔴</span>}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card size="small">
-            <Statistic
-              title="📈 观察信号"
-              value={statsData.watch}
-              prefix={<span style={{ color: '#fa8c16' }}>🟠</span>}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card size="small">
-            <Statistic
-              title="📉 弱势信号"
-              value={statsData.weak}
-              prefix={<span style={{ color: '#1f77b9' }}>🔵</span>}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* 控制栏 */}
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]} align="middle">
-          <Col xs={24} sm={12}>
-            <Space>
-              <Text strong>排序:</Text>
-              <Segmented
-                value={sortBy}
-                onChange={(val) => setSortBy(val as SortBy)}
-                options={[
-                  { label: '📊 评分', value: 'score' },
-                  { label: '📈 涨跌', value: 'change' },
-                  { label: '💰 资金', value: 'flow' },
-                ]}
+        {/* 统计卡片 */}
+        <Row gutter={[16, 16]}>
+          <Col xs={24} sm={8}>
+            <Card size="small">
+              <Statistic
+                title="强势信号"
+                value={statsData.strong}
+                valueStyle={{ color: '#cf1322' }}
               />
-            </Space>
+            </Card>
           </Col>
-          <Col xs={24} sm={12}>
-            <Space>
-              <Text strong>筛选:</Text>
-              <Segmented
-                value={filterSignal}
-                onChange={(val) => setFilterSignal(val as FilterSignal)}
-                options={[
-                  { label: '全部', value: 'all' },
-                  { label: '强势', value: 'strong' },
-                  { label: '观察', value: 'watch' },
-                  { label: '弱势', value: 'weak' },
-                ]}
+          <Col xs={24} sm={8}>
+            <Card size="small">
+              <Statistic
+                title="观察信号"
+                value={statsData.watch}
+                valueStyle={{ color: '#fa8c16' }}
               />
-            </Space>
+            </Card>
+          </Col>
+          <Col xs={24} sm={8}>
+            <Card size="small">
+              <Statistic
+                title="弱势信号"
+                value={statsData.weak}
+                valueStyle={{ color: '#1f77b9' }}
+              />
+            </Card>
           </Col>
         </Row>
-      </Card>
 
-      {/* 数据表 */}
-      <Card
-        size="small"
-        extra={
-          rankingData && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              共 {rankingData.data.totalSectors} 个板块 • 更新于 {new Date(rankingData.data.timestamp).toLocaleTimeString()}
-            </Text>
-          )
-        }
-      >
-        {displayData.length === 0 ? (
-          <Empty description="当前筛选条件下无数据" style={{ padding: 40 }} />
-        ) : (
-          <Table
-            dataSource={displayData}
-            columns={columns}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
-            rowKey="rank"
-            size="small"
-            scroll={{ x: 1000 }}
-            onRow={(record) => ({
-              onClick: () => {
-                setSelectedSector(record)
-                setDrawerVisible(true)
-              },
-              style: { cursor: 'pointer' },
-            })}
-          />
-        )}
-      </Card>
-      </div>
+        {/* 控制栏 */}
+        <Card size="small">
+          <Row gutter={[16, 16]} align="middle">
+            <Col xs={24} sm={12}>
+              <Space>
+                <Text strong>排序:</Text>
+                <Segmented
+                  value={sortBy}
+                  onChange={(val) => setSortBy(val as SortBy)}
+                  options={[
+                    { label: '评分', value: 'score' },
+                    { label: '涨跌', value: 'change' },
+                    { label: '资金', value: 'flow' },
+                  ]}
+                />
+              </Space>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Space>
+                <Text strong>筛选:</Text>
+                <Segmented
+                  value={filterSignal}
+                  onChange={(val) => setFilterSignal(val as FilterSignal)}
+                  options={[
+                    { label: '全部', value: 'all' },
+                    { label: '强势', value: 'strong' },
+                    { label: '观察', value: 'watch' },
+                    { label: '弱势', value: 'weak' },
+                  ]}
+                />
+              </Space>
+            </Col>
+          </Row>
+        </Card>
+
+        {/* 数据表 */}
+        <Card
+          size="small"
+          extra={
+            rankingData && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                共 {rankingData.data.totalSectors} 个板块 • 更新于 {new Date(rankingData.data.timestamp).toLocaleTimeString()}
+              </Text>
+            )
+          }
+        >
+          {displayData.length === 0 ? (
+            <Empty description="当前筛选条件下无数据" style={{ padding: 40 }} />
+          ) : (
+            <Table
+              dataSource={displayData}
+              columns={columns}
+              pagination={{ pageSize: 20, showSizeChanger: true }}
+              rowKey="rank"
+              size="small"
+              scroll={{ x: 1000 }}
+              onRow={(record) => ({
+                onClick: () => {
+                  setSelectedSector(record)
+                  setDrawerVisible(true)
+                },
+                style: { cursor: 'pointer' },
+              })}
+            />
+          )}
+        </Card>
       </DataStatePanel>
 
       {/* 右侧详情抽屉 */}
@@ -518,6 +508,6 @@ export default function SectorRankingBoard() {
         visible={drawerVisible}
         onClose={() => setDrawerVisible(false)}
       />
-    </div>
+    </PageContainer>
   )
 }

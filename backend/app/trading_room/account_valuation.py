@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.trading_room import AccountValuationSnapshotRecord
+
+
+def _naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 class AccountValuationService:
@@ -31,7 +37,7 @@ class AccountValuationService:
             cash=cash,
             equity=holdings_value + cash,
             confidence=confidence,
-            captured_at=captured_at.replace(tzinfo=None),
+            captured_at=_naive_utc(captured_at),
         )
         self._db.add(row)
         await self._db.flush()
@@ -50,7 +56,7 @@ class AccountValuationService:
             cash=None,
             equity=None,
             confidence="UNKNOWN",
-            captured_at=captured_at.replace(tzinfo=None),
+            captured_at=_naive_utc(captured_at),
         )
         self._db.add(row)
         await self._db.flush()
@@ -62,12 +68,12 @@ class AccountValuationService:
         as_of: datetime,
         lookback_days: int = 180,
     ) -> float | None:
-        cutoff = as_of.replace(tzinfo=None) - timedelta(days=lookback_days)
+        cutoff = _naive_utc(as_of) - timedelta(days=lookback_days)
         result = await self._db.execute(
             select(func.max(AccountValuationSnapshotRecord.equity))
             .where(
                 AccountValuationSnapshotRecord.captured_at >= cutoff,
-                AccountValuationSnapshotRecord.captured_at <= as_of.replace(tzinfo=None),
+                AccountValuationSnapshotRecord.captured_at <= _naive_utc(as_of),
                 AccountValuationSnapshotRecord.confidence.in_(["HIGH", "MEDIUM"]),
                 AccountValuationSnapshotRecord.equity.isnot(None),
             )

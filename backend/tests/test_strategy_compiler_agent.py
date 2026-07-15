@@ -107,3 +107,38 @@ def test_strategy_compiler_extracts_json_from_common_model_response_shapes():
 
     assert _parse_json_object(anthropic_text) == {"ok": True}
     assert _parse_json_object(openai_text) == {"ok": True}
+
+
+def test_strategy_compiler_headers_prefer_bearer_auth_token(monkeypatch):
+    """ark authenticates via Authorization: Bearer, not x-api-key."""
+    from app.backtest.strategy_compiler_agent import AnthropicStrategyCompilerClient
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "anthropic_auth_token", "ark-bearer")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-old")
+
+    headers = AnthropicStrategyCompilerClient()._headers()
+    assert headers["authorization"] == "Bearer ark-bearer"
+    assert "x-api-key" not in headers
+
+
+def test_strategy_compiler_headers_fall_back_to_x_api_key(monkeypatch):
+    from app.backtest.strategy_compiler_agent import AnthropicStrategyCompilerClient
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "anthropic_auth_token", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-old")
+
+    headers = AnthropicStrategyCompilerClient()._headers()
+    assert headers["x-api-key"] == "sk-old"
+    assert "authorization" not in headers
+
+
+def test_strategy_compiler_headers_none_when_unconfigured(monkeypatch):
+    from app.backtest.strategy_compiler_agent import AnthropicStrategyCompilerClient
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "anthropic_auth_token", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+
+    assert AnthropicStrategyCompilerClient()._headers() is None

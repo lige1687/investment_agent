@@ -1,6 +1,6 @@
 """REST API contracts for policy cold-start and shadow-mode sessions."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -547,3 +547,61 @@ async def test_current_policy_returns_latest_ready_version(client):
     body = current.json()
     assert body["version_id"] == ready["version_id"]
     assert body["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_funding_feeds_peak_into_next_session(client):
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
+    )
+    session = (
+        await client.post(
+            "/api/v1/agent/trading-room/sessions",
+            json=_session_payload(policy["version_id"]),
+        )
+    ).json()
+    finalized = await client.post(
+        f"/api/v1/agent/trading-room/sessions/{session['session_id']}/finalize",
+        json=_finalize_payload(),
+    )
+    assert finalized.status_code == 200
+
+    # A later session must inherit the confirmed equity (20k holdings + 20k cash)
+    # as its recent peak. as_of is a day ahead so the confirmation — stamped at
+    # server-now during finalize — falls inside the lookback window.
+    next_payload = _session_payload(policy["version_id"])
+    next_payload["as_of"] = (NOW + timedelta(days=1)).isoformat()
+    next_session = await client.post(
+        "/api/v1/agent/trading-room/sessions", json=next_payload
+    )
+    assert next_session.status_code == 200
+    assert next_session.json()["context"]["peak_equity"] == 40000
+
+
+@pytest.mark.asyncio
+async def test_demo_session_does_not_record_valuation(client):
+    policy = await _import_policy(
+        client, [{"scope": "fund", "key": "001513", "target_pct": 0.3}]
+    )
+    demo_payload = _session_payload(policy["version_id"])
+    demo_payload["data_mode"] = "demo"
+    demo_session = (
+        await client.post(
+            "/api/v1/agent/trading-room/sessions", json=demo_payload
+        )
+    ).json()
+    finalized = await client.post(
+        f"/api/v1/agent/trading-room/sessions/{demo_session['session_id']}/finalize",
+        json=_finalize_payload(),
+    )
+    assert finalized.status_code == 200
+
+    # A demo run must not pollute the valuation audit trail: a later live
+    # session sees no peak even though the demo finalize confirmed funding.
+    next_payload = _session_payload(policy["version_id"])
+    next_payload["as_of"] = (NOW + timedelta(days=1)).isoformat()
+    next_session = await client.post(
+        "/api/v1/agent/trading-room/sessions", json=next_payload
+    )
+    assert next_session.status_code == 200
+    assert next_session.json()["context"]["peak_equity"] is None

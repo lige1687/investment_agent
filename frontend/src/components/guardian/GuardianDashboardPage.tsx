@@ -8,12 +8,13 @@ import {
   AlertOutlined, CheckCircleOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { agentApi } from '@/api/agent'
+import PageContainer from '@/components/layout/PageContainer'
 import type {
   DecisionCard, GuardianRun, HoldingAlert,
 } from '@/types/agent'
 import DecisionCardView from '../agent/DecisionCardView'
 
-const { Title, Text, Paragraph } = Typography
+const { Text, Paragraph } = Typography
 
 const SEV_COLOR: Record<string, string> = { HIGH: 'red', MEDIUM: 'orange', LOW: 'blue' }
 const SLOT_LABEL: Record<string, string> = { midday: '午盘 11:30', close: '尾盘 14:30', manual: '临时' }
@@ -74,11 +75,11 @@ export default function GuardianDashboardPage() {
   const selectedRun = runs.find(r => r.session_id === selectedSid) || null
 
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Title level={4} style={{ margin: 0 }}>
-          <SafetyOutlined /> 持仓守护 Guardian
-        </Title>
+    <PageContainer
+      title={<Space><SafetyOutlined /> 持仓守护</Space>}
+      subtitle="每工作日 11:30 午盘 / 14:30 尾盘自动体检,飞书推送。立即体检现在跑一次。"
+      size="wide"
+      extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={loadRuns} loading={loading}>刷新</Button>
           <Button
@@ -90,14 +91,8 @@ export default function GuardianDashboardPage() {
             立即体检
           </Button>
         </Space>
-      </div>
-
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        每工作日 11:30 午盘 / 14:30 尾盘自动体检,飞书推送。「立即体检」现在跑一次。
-      </Text>
-
-      <Divider style={{ margin: '16px 0' }} />
-
+      }
+    >
       <Row gutter={16}>
         {/* Left: run list */}
         <Col xs={24} md={10}>
@@ -248,6 +243,6 @@ export default function GuardianDashboardPage() {
           )}
         </Col>
       </Row>
-    </div>
+    </PageContainer>
   )
 }

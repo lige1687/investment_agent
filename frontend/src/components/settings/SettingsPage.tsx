@@ -9,11 +9,12 @@ import {
 } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { yangjibaoApi } from '@/api/yangjibao'
+import PageContainer from '@/components/layout/PageContainer'
 import FeishuConfigCard from '@/components/feishu/FeishuConfigCard'
 import type { YangjibaoPortfolio, SyncResult } from '@/types/yangjibao'
 import { formatNumber } from '@/utils/format'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 export default function SettingsPage() {
   const [qrImage, setQrImage] = useState<string | null>(null)
@@ -112,8 +113,7 @@ export default function SettingsPage() {
   })
 
   return (
-    <div>
-      <Title level={4}>系统设置</Title>
+    <PageContainer title="系统设置" subtitle="账户连接、推送与集成配置">
       <Space direction="vertical" style={{ width: '100%' }} size={16}>
 
         {/* ── 养基宝连接 ── */}
@@ -272,6 +272,6 @@ export default function SettingsPage() {
         </Card>
 
       </Space>
-    </div>
+    </PageContainer>
   )
 }

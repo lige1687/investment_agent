@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -64,18 +65,20 @@ class TradingRoomOrchestrator:
 
     async def discuss(self, context: TradingContextSnapshot) -> TradingDiscussionResult:
         snapshot_payload = context.model_dump(mode="json")
-        round_one: dict[str, SpecialistRunResult] = {}
-        for role in ROUND_ONE_ROUTE:
+
+        async def _run_role(role: str) -> tuple[str, SpecialistRunResult]:
             runner = self._runners.get(role)
             if runner is None:
-                round_one[role] = _missing_role(role, context.context_hash)
-                continue
+                return role, _missing_role(role, context.context_hash)
             # Every role receives the identical snapshot and hash, never another
-            # first-round memo. Sequential execution does not change independence.
-            round_one[role] = await runner.run_round_one(
+            # first-round memo. Independence lets the roles run concurrently.
+            return role, await runner.run_round_one(
                 context_snapshot=snapshot_payload,
                 context_hash=context.context_hash,
             )
+
+        pairs = await asyncio.gather(*(_run_role(role) for role in ROUND_ONE_ROUTE))
+        round_one: dict[str, SpecialistRunResult] = dict(pairs)
 
         conflicts = _extract_conflicts(round_one)
         claims = [

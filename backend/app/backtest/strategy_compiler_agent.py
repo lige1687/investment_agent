@@ -27,14 +27,22 @@ class AnthropicStrategyCompilerClient:
         pass
 
     def _headers(self) -> dict[str, str] | None:
-        api_key = settings.anthropic_api_key or settings.anthropic_auth_token
-        if not api_key:
-            return None
-        return {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
+        # ark and other Bearer-token proxies authenticate via Authorization,
+        # not x-api-key. Prefer auth_token when set; fall back to api_key for
+        # Anthropic-native (x-api-key) providers.
+        if settings.anthropic_auth_token:
+            return {
+                "authorization": f"Bearer {settings.anthropic_auth_token}",
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+        if settings.anthropic_api_key:
+            return {
+                "x-api-key": settings.anthropic_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+        return None
 
     async def complete_json(self, prompt: str) -> dict[str, Any]:
         headers = self._headers()
@@ -43,7 +51,8 @@ class AnthropicStrategyCompilerClient:
         base_url = settings.anthropic_base_url.rstrip("/") if settings.anthropic_base_url else "https://api.anthropic.com"
         payload = {
             "model": settings.anthropic_model,
-            "max_tokens": 4096,
+            # Reasoning models spend part of this budget on a thinking block.
+            "max_tokens": 8192,
             "temperature": 0,
             "messages": [{"role": "user", "content": prompt}],
         }

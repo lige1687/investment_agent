@@ -1,5 +1,6 @@
 """Two-round orchestration and fail-closed decision tests."""
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -179,6 +180,40 @@ async def test_orchestrator_runs_independent_round_then_conflicts_only_round_two
     assert set(skeptic_payload) == {"conflicts", "claims_for_review"}
     assert "immutable_context_snapshot" not in skeptic_payload
     assert result.context_hash == _context().context_hash
+
+
+class _GatedRunner(StubRunner):
+    """Round-one runner whose start/finish is gated on an asyncio.Event."""
+
+    def __init__(self, role, *, waits_on=None, sets=None):
+        super().__init__(role)
+        self._waits_on = waits_on
+        self._sets = sets
+
+    async def run_round_one(self, **kwargs):
+        if self._waits_on is not None:
+            await self._waits_on.wait()
+        if self._sets is not None:
+            self._sets.set()
+        return await super().run_round_one(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_round_one_runs_concurrently():
+    # portfolio_risk (first in route) blocks until market_regime (second) runs.
+    # Serial execution would deadlock — portfolio_risk awaits an event that only
+    # gets set when market_regime executes, which serial ordering never reaches.
+    gate = asyncio.Event()
+    runners = {role: StubRunner(role) for role in (*ROUND_ONE_ROUTE, "skeptic")}
+    runners["portfolio_risk"] = _GatedRunner("portfolio_risk", waits_on=gate)
+    runners["market_regime"] = _GatedRunner("market_regime", sets=gate)
+    orchestrator = TradingRoomOrchestrator(runners=runners)
+
+    result = await asyncio.wait_for(orchestrator.discuss(_context()), timeout=5)
+
+    assert list(result.round_one) == list(ROUND_ONE_ROUTE)
+    assert result.round_one["portfolio_risk"].state is SpecialistState.COMPLETED
+    assert result.round_one["market_regime"].state is SpecialistState.COMPLETED
 
 
 def _policy():
