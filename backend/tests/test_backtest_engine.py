@@ -505,3 +505,58 @@ def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_repair
     # 第二次应该是观察期末的最终卖出（通过 post_sell_observation）
     assert core_sells[1].shares == pytest.approx(5_000.0)
     assert core_sells[1].event_type == "post_sell_observation", "第二次卖应该由 post_sell_observation 触发（观察期末）"
+
+
+# ── Task 3: buy path two-layer observation model ──────────────────────────
+
+
+def _build_breakout_series(confirmed: bool = True):
+    """Build signal bars with a volume breakout above EXPMA at index 6.
+
+    expma_window=3, buy_volume_window=3 (from _config default).
+    - 6 flat bars at close=10.0, vol=100 (EXPMA converges to 10.0)
+    - index 6: close=12.0, vol=150 -> buy trigger (volume breakout above EXPMA)
+    - T+1/T+2: confirmed -> stays at 12.0; not confirmed -> T+1 drops to 9.0
+    - index 9: T+3 execution day
+    """
+    closes = [10.0] * 6 + [12.0]
+    volumes = [100.0] * 6 + [150.0]
+    if confirmed:
+        closes.extend([12.0, 12.0, 12.0])
+        volumes.extend([100.0, 100.0, 100.0])
+    else:
+        closes.extend([9.0, 12.0, 12.0])  # T+1 falls back below EXPMA
+        volumes.extend([100.0, 100.0, 100.0])
+    return _navs([1.0] * len(closes)), _bars(closes, volumes)
+
+
+def _first_buy_trigger_date(signal_bars, config):
+    from app.backtest.trigger_scanner import TriggerScanner
+
+    scanner = TriggerScanner(config)
+    triggers = scanner.scan(signal_bars)
+    buys = [t for t in triggers if t.kind == "buy"]
+    assert buys, "Expected at least one buy trigger"
+    return buys[0].date
+
+
+def test_buy_trigger_fills_on_T_plus_3_when_observation_confirms():
+    fund_nav, signal_bars = _build_breakout_series(confirmed=True)
+    config = _config()
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    buys = [t for t in result.trades if t.action == "buy"]
+    assert len(buys) == 1
+    trigger_date = _first_buy_trigger_date(signal_bars, config)
+    assert buys[0].date == trigger_date + timedelta(days=3)
+
+
+def test_buy_not_confirmed_does_not_buy_and_records_gate():
+    fund_nav, signal_bars = _build_breakout_series(confirmed=False)
+    config = _config()
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    assert not [t for t in result.trades if t.action == "buy"]
+    gates = [
+        e for e in result.events
+        if e.get("details", {}).get("gate") == "observation_not_confirmed"
+    ]
+    assert gates, "Expected observation_not_confirmed gate event"

@@ -19,9 +19,11 @@ from app.backtest.models import (
     SignalBar,
     TradeRecord,
 )
+from app.backtest.observation.judge import DeterministicJudge, OBSERVATION_DAYS
 from app.backtest.report_agent import ReportAgent
 from app.backtest.strategy import RuleBasedStrategyAgent, StrategyDecision
 from app.backtest.trigger_engine import TriggerEngine, TriggerSignal
+from app.backtest.trigger_scanner import TriggerPoint, TriggerScanner
 
 
 @dataclass
@@ -113,19 +115,21 @@ class BacktestEngine:
         batch_skill_router = BatchTradingSkillRouter(config)
         audit_trigger_engine = TriggerEngine(config)
         execution_logger = ExecutionLogger()
+        scanner = TriggerScanner(config)
+        judge = DeterministicJudge()
+        buy_trigger_map = {t.index: t for t in scanner.scan(signal_bars) if t.kind == "buy"}
         pending: list[tuple[BacktestEvent, StrategyDecision]] = []
         equity_curve: list[PortfolioSnapshot] = []
         trades: list[TradeRecord] = []
         events: list[dict] = []
         peak_return_pct = 0.0
         peak_equity = config.initial_cash
-        buy_cooldown_until_index = -1
         sell_cooldown_until_index = -1
         core_sell_cooldown_until_index = -1
         # 买入观察期状态
         buy_observation_start_index = -1
         buy_observation_until_index = -1
-        buy_observation_candidate: BacktestEvent | None = None
+        buy_observation_candidate: TriggerPoint | None = None
         post_sell_observation_start_index = -1
         post_sell_observation_until_index = -1
         post_sell_source_event_type = ""
@@ -187,20 +191,100 @@ class BacktestEngine:
                 start_index=post_sell_observation_start_index,
                 until_index=post_sell_observation_until_index,
             )
-            # 检查是否在买入观察期内
+            # ── 买入触发与观察期（L1 机械触发 + L2 观察判定）──────────────
+            # TriggerScanner 预扫 buy 触发点；EventDetector 的 buy_candidate 被忽略
+            detector_events = [
+                e for e in detector.detect(index=index, bars=signal_bars, snapshot=snapshot)
+                if e.event_type != "buy_candidate"
+            ]
+
             buy_confirmation_event = None
+            buy_hold_event = None
             if buy_observation_start_index <= index <= buy_observation_until_index:
-                # 在观察期内，每日重新评估条件是否仍满足
-                if index == buy_observation_until_index:
-                    # 观察期最后一天，生成 buy_confirmation 事件
-                    buy_confirmation_event = self._detect_buy_confirmation(
-                        buy_observation_candidate, index, signal_bars, snapshot, config
+                if index == buy_observation_until_index and buy_observation_candidate is not None:
+                    # 观察期最后一天：调 judge 判定
+                    trigger = buy_observation_candidate
+                    window_start = trigger.index + 1
+                    window_bars = signal_bars[window_start : window_start + OBSERVATION_DAYS]
+                    judgment = judge.judge(
+                        trigger, window_bars, config, all_bars=signal_bars
                     )
-                # 不再在观察期内生成新的 buy_candidate
-                detector_events = [e for e in detector.detect(index=index, bars=signal_bars, snapshot=snapshot)
-                                  if e.event_type != "buy_candidate"]
-            else:
-                detector_events = detector.detect(index=index, bars=signal_bars, snapshot=snapshot)
+                    if judgment.confirmed and judgment.decision == "buy":
+                        buy_confirmation_event = BacktestEvent(
+                            event_type="buy_confirmation",
+                            date=signal_bars[index].date,
+                            reason=judgment.reason,
+                            details={
+                                "original_buy_signal": {"signal_level": "strong_buy"},
+                                "observation_days": OBSERVATION_DAYS,
+                                "trigger": {
+                                    "kind": "buy",
+                                    "index": trigger.index,
+                                    "date": trigger.date.isoformat(),
+                                },
+                                "market_regime": "neutral",
+                                "judgment": {
+                                    "confirmed": judgment.confirmed,
+                                    "gate": judgment.gate,
+                                },
+                            },
+                            snapshot=snapshot,
+                        )
+                    else:
+                        # 未确认：记录 hold + gate，重置观察期
+                        buy_hold_event = BacktestEvent(
+                            event_type="buy_candidate",
+                            date=signal_bars[index].date,
+                            reason=judgment.reason,
+                            details={
+                                "gate": judgment.gate or "observation_not_confirmed",
+                                "trigger": {
+                                    "kind": "buy",
+                                    "index": trigger.index,
+                                    "date": trigger.date.isoformat(),
+                                },
+                                "judgment": {
+                                    "confirmed": judgment.confirmed,
+                                    "gate": judgment.gate,
+                                },
+                            },
+                            snapshot=snapshot,
+                        )
+                        buy_observation_start_index = -1
+                        buy_observation_until_index = -1
+                        buy_observation_candidate = None
+            elif (
+                index in buy_trigger_map
+                and snapshot.position_pct
+                < min(config.target_position_pct, config.max_single_position_pct)
+            ):
+                # 新的买入触发：进入观察期
+                trigger = buy_trigger_map[index]
+                buy_observation_start_index = index
+                buy_observation_until_index = index + OBSERVATION_DAYS
+                buy_observation_candidate = trigger
+                if test_mode:
+                    observe_event = BacktestEvent(
+                        event_type="buy_candidate",
+                        date=signal_bars[index].date,
+                        reason="放量突破站上EXPMA，进入2天观察期",
+                        details={
+                            "trigger": {
+                                "kind": "buy",
+                                "index": trigger.index,
+                                "date": trigger.date.isoformat(),
+                            },
+                        },
+                        snapshot=snapshot,
+                    )
+                    decision = StrategyDecision(
+                        action="observe",
+                        reason="买入信号进入2天观察期，确认条件是否持续满足",
+                        observe_days=OBSERVATION_DAYS,
+                    )
+                    events.append(
+                        self._event_record(observe_event, decision, reporter, batch_skill_router)
+                    )
 
             day_events = self._merge_batch_events(
                 detector_events,
@@ -211,22 +295,18 @@ class BacktestEngine:
             if buy_confirmation_event:
                 day_events.append(buy_confirmation_event)
 
-            emitted_event = False
+            # 记录未确认的 hold 事件
+            if buy_hold_event:
+                hold_decision = StrategyDecision(
+                    action="hold",
+                    reason=buy_hold_event.reason,
+                )
+                events.append(
+                    self._event_record(buy_hold_event, hold_decision, reporter, batch_skill_router)
+                )
+
+            emitted_event = bool(buy_hold_event)
             for event in day_events:
-                # 处理 buy_candidate：进入观察期而不是立即买入
-                if event.event_type == "buy_candidate":
-                    buy_observation_start_index = index
-                    buy_observation_until_index = index + 2  # 观察2天
-                    buy_observation_candidate = event
-                    if test_mode:
-                        decision = StrategyDecision(
-                            action="observe",
-                            reason="买入信号进入2天观察期，确认条件是否持续满足",
-                            observe_days=2,
-                        )
-                        events.append(self._event_record(event, decision, reporter, batch_skill_router))
-                        emitted_event = True
-                    continue
                 is_core_protection = event.details.get("batch_protection") == "core_cost_line"
                 # 核心仓保护走独立冷却期，避免每日重复触发；但不受非核心仓卖出冷却期约束。
                 if is_core_protection and index <= core_sell_cooldown_until_index:
@@ -275,8 +355,6 @@ class BacktestEngine:
 
                 if decision.action in {"buy", "sell"}:
                     pending.append((event, decision))
-                if event.event_type == "buy_candidate":
-                    buy_cooldown_until_index = index + max(decision.observe_days, config.buy_cooldown_days)
                 if decision.action == "sell" and event.event_type in {"profit_drawdown", "technical_breakdown"}:
                     if is_core_protection:
                         # 核心仓保护的第一次卖出后设置冷却期 = 观察期长度（3天）

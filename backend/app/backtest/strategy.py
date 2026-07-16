@@ -32,7 +32,9 @@ class RuleBasedStrategyAgent:
                 reason="账户级风控触发，禁止买入/禁止加仓，先保账户风险",
             )
         if event.event_type == "buy_candidate":
-            # 在进入观察期前，先检查一些关键风控
+            # buy_candidate 现在由 TriggerScanner 触发、引擎直接管理观察期，
+            # strategy.decide() 不再在非 test 模式下被调用。
+            # 保留 account_risk / dust 检查供 test 模式记录。
             trigger_signals = event.details.get("trigger_signals", [])
             if any(
                 trigger.get("priority") == "P0" and trigger.get("trigger_family") == "account_risk"
@@ -60,31 +62,12 @@ class RuleBasedStrategyAgent:
                     reason="剩余可买空间低于最小交易仓位，忽略零头补仓",
                 )
 
-            # 分级观察期：根据信号强度决定观察期长度
-            buy_signal = event.details.get("buy_signal", {})
-            signal_level = buy_signal.get("signal_level")
-
-            if signal_level == "strong_buy":
-                # 强买信号（5/5维度）：立即执行，无需观察
-                return StrategyDecision(
-                    action="observe",
-                    reason="强买信号闭环（5/5维度），立即进入确认流程，无需等待",
-                    observe_days=0,
-                )
-            elif signal_level == "middle_buy":
-                # 中等买信号（4/5维度）：观察1天确认
-                return StrategyDecision(
-                    action="observe",
-                    reason="中等买信号已基本确认（4/5维度），观察1天确认持续性",
-                    observe_days=1,
-                )
-            else:  # weak_buy
-                # 弱买信号（3/5维度）：观察2天确认
-                return StrategyDecision(
-                    action="observe",
-                    reason="弱买信号需要确认（3/5维度），观察2天确认条件持续满足",
-                    observe_days=2,
-                )
+            # 统一观察期：不再按 5 维 signal_level 分级（已删除死规则）
+            return StrategyDecision(
+                action="observe",
+                reason="放量突破站上EXPMA，进入观察期确认站稳",
+                observe_days=2,
+            )
         if event.event_type == "buy_confirmation":
             return self._decide_buy(event)
         if event.event_type == "risk_block":
