@@ -17,6 +17,7 @@ class StrategyDecision:
     target_position_delta_pct: float = 0.0
     ratio_of_position: float = 0.0
     observe_days: int = 0
+    gate: str | None = None  # visible gate for hold/observe decisions
 
 
 class RuleBasedStrategyAgent:
@@ -133,6 +134,7 @@ class RuleBasedStrategyAgent:
                 action="observe",
                 observe_days=self.config.observe_days,
                 reason="P0账户风控触发，禁止买入/禁止加仓，先重新评估账户风险",
+                gate="account_risk",
             )
         snapshot = event.snapshot
         current_position_pct = snapshot.position_pct if snapshot else 0.0
@@ -143,9 +145,15 @@ class RuleBasedStrategyAgent:
         )
         remaining_target = max(effective_target - current_position_pct, 0.0)
         if remaining_target <= 0:
-            return StrategyDecision(action="hold", reason="当前仓位已达到目标仓位，不再加仓")
+            return StrategyDecision(
+                action="hold", reason="当前仓位已达到目标仓位，不再加仓", gate="target_reached"
+            )
         if remaining_target < self.config.min_trade_position_pct:
-            return StrategyDecision(action="hold", reason="剩余可买空间低于最小交易仓位，忽略零头补仓")
+            return StrategyDecision(
+                action="hold",
+                reason="剩余可买空间低于最小交易仓位，忽略零头补仓",
+                gate="min_trade_floor",
+            )
 
         # 对于 buy_confirmation 事件，使用原始的买入信号
         buy_signal = event.details.get("original_buy_signal", {})
@@ -184,7 +192,11 @@ class RuleBasedStrategyAgent:
 
         buy_size = min(effective_target * buy_scale, remaining_target)
         if buy_size < self.config.min_trade_position_pct:
-            return StrategyDecision(action="hold", reason="本次买入低于最小交易仓位，忽略零头补仓")
+            return StrategyDecision(
+                action="hold",
+                reason="本次买入低于最小交易仓位，忽略零头补仓",
+                gate="min_trade_floor",
+            )
 
         reason = f"{scale_reason}，保留后续确认仓位"
 

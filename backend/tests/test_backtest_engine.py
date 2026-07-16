@@ -616,3 +616,39 @@ def test_sell_not_confirmed_does_not_sell():
         e for e in result.events
         if e.get("details", {}).get("gate") == "observation_not_confirmed"
     ]
+
+
+# ── Task 5: visible gates + incomplete window handling ────────────────────
+
+
+def test_buy_at_full_position_records_target_reached_gate():
+    """Buy trigger confirms but position already at target -> hold with gate=target_reached."""
+    # initial_position_pct=0.19, fund NAV rises to 1.1 during observation
+    # -> position_pct > target -> _decide_buy returns hold with target_reached
+    closes = [10.0] * 6 + [12.0, 12.0, 12.0, 12.0]
+    volumes = [100.0] * 6 + [150.0, 100.0, 100.0, 100.0]
+    fund_nav = _navs([1.0] * 8 + [1.1, 1.1])
+    signal_bars = _bars(closes, volumes)
+    config = _config(initial_position_pct=0.19, target_position_pct=0.2)
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    assert not [t for t in result.trades if t.action == "buy"]
+    assert any(
+        e.get("details", {}).get("gate") == "target_reached"
+        for e in result.events
+    )
+
+
+def test_trigger_near_last_bar_records_incomplete_window():
+    """Buy trigger near end of data -> window incomplete -> hold with gate=incomplete_window."""
+    # 8 bars total, trigger at index 6, observation until index 8 (beyond data)
+    closes = [10.0] * 6 + [12.0, 12.0]
+    volumes = [100.0] * 6 + [150.0, 100.0]
+    fund_nav = _navs([1.0] * 8)
+    signal_bars = _bars(closes, volumes)
+    config = _config()
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    assert not [t for t in result.trades if t.action == "buy"]
+    assert any(
+        e.get("details", {}).get("gate") == "incomplete_window"
+        for e in result.events
+    )

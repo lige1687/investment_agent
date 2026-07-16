@@ -236,6 +236,9 @@ class BacktestEngine:
                             },
                             snapshot=snapshot,
                         )
+                        buy_observation_start_index = -1
+                        buy_observation_until_index = -1
+                        buy_observation_candidate = None
                     else:
                         # 未确认：记录 hold + gate，重置观察期
                         buy_hold_event = BacktestEvent(
@@ -331,6 +334,9 @@ class BacktestEngine:
                             },
                             snapshot=snapshot,
                         )
+                        sell_observation_start_index = -1
+                        sell_observation_until_index = -1
+                        sell_observation_candidate = None
                     else:
                         # 未确认：记录 hold + gate，重置观察期
                         sell_hold_event = BacktestEvent(
@@ -492,6 +498,48 @@ class BacktestEngine:
                     )
                     events.append(self._event_record(event, decision, reporter, batch_skill_router))
 
+        # ── 末段不完整窗口处理 ──────────────────────────────────────────
+        # 观察期未在循环内结束（触发临近末段 bar）-> 记录 incomplete_window hold
+        last_snapshot = equity_curve[-1] if equity_curve else None
+        for obs_candidate, obs_type in [
+            (buy_observation_candidate, "buy"),
+            (sell_observation_candidate, "sell"),
+        ]:
+            if obs_candidate is None:
+                continue
+            trigger = obs_candidate
+            window_start = trigger.index + 1
+            window_bars = signal_bars[window_start : window_start + OBSERVATION_DAYS]
+            judgment = judge.judge(trigger, window_bars, config, all_bars=signal_bars)
+            # 观察期未在循环内结束 = 无法 T+3 成交 -> incomplete_window
+            gate = "incomplete_window"
+            hold_event = BacktestEvent(
+                event_type="buy_candidate" if obs_type == "buy" else "technical_breakdown",
+                date=signal_bars[-1].date,
+                reason=f"{'买入' if obs_type == 'buy' else '卖出'}观察窗口未完成（临近末段bar），{judgment.reason}",
+                details={
+                    "gate": gate,
+                    "trigger": {
+                        "kind": obs_type,
+                        "index": trigger.index,
+                        "date": trigger.date.isoformat(),
+                    },
+                    "judgment": {
+                        "confirmed": judgment.confirmed,
+                        "gate": judgment.gate,
+                    },
+                },
+                snapshot=last_snapshot,
+            )
+            hold_decision = StrategyDecision(
+                action="hold",
+                reason=hold_event.reason,
+                gate=gate,
+            )
+            events.append(
+                self._event_record(hold_event, hold_decision, reporter, batch_skill_router)
+            )
+
         metrics = self._calculate_metrics(config, equity_curve, trades, peak_equity)
 
         # 生成执行日志文件
@@ -529,11 +577,15 @@ class BacktestEngine:
         reporter: ReportAgent,
         batch_skill_router: BatchTradingSkillRouter,
     ) -> dict:
+        # Merge decision.gate into event details for visible gates
+        details = dict(event.details)
+        if decision.gate and "gate" not in details:
+            details["gate"] = decision.gate
         record = {
             "date": event.date.isoformat(),
             "event_type": event.event_type,
             "reason": event.reason,
-            "details": event.details,
+            "details": details,
             "decision": asdict(decision),
             "analysis_report": reporter.build(event, decision),
             "skill_route": batch_skill_router.route(event, decision),
