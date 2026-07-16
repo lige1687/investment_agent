@@ -122,9 +122,13 @@ class ConversationChair:
         )
 
 
-_NUMBER_RE = re.compile(r"(?<![.\d])(\d{3,7})(?![.\d])")
+_NUMBER_RE = re.compile(r"(?<![.\d])(\d{3,7})(?=\s*[元块万亿])")
 
 
 def _extract_numbers(text: str) -> list[float]:
-    """Pull out integer-ish amounts (3-7 digits) that look like money figures."""
+    """Pull out integer-ish amounts (3-7 digits) immediately followed by a money
+    unit (元/块/万/亿). Fund codes (e.g. 001513) and years (e.g. 2026年) are not
+    adjacent to a money unit, so they are ignored - only cited 金额 figures are
+    range-checked against the referenced AmountSuggestion.
+    """
     return [float(m.group(1)) for m in _NUMBER_RE.finditer(text)]
