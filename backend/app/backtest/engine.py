@@ -9,7 +9,7 @@ from app.backtest.batch_skill_router import BatchTradingSkillRouter
 from app.backtest.events import BacktestEvent, EventDetector
 from app.backtest.execution_logger import ExecutionLogger
 from app.backtest.fees import FundFeeModel
-from app.backtest.indicators import expma
+from app.backtest.indicators import expma, volume_ratio
 from app.backtest.models import (
     BacktestConfig,
     BacktestMetrics,
@@ -321,7 +321,10 @@ class BacktestEngine:
                                     [b.close for b in signal_bars[: index + 1]],
                                     config.expma_window,
                                 )[index],
-                                "volume_ratio": signal_bars[index].volume,
+                                "volume_ratio": volume_ratio(
+                                    [b.volume for b in signal_bars[: index + 1]],
+                                    config.buy_volume_window,
+                                )[index],
                                 "trigger": {
                                     "kind": "sell",
                                     "index": trigger.index,

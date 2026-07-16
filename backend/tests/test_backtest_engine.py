@@ -628,6 +628,33 @@ def test_sell_not_confirmed_does_not_sell():
     ]
 
 
+def test_sell_breakdown_event_details_store_volume_ratio_not_raw_volume():
+    """Sell confirmation event details["volume_ratio"] must be the actual
+    volume ratio (vol / prior-window avg), not the raw volume value.
+    """
+    config = _config(initial_position_pct=0.2, breakdown_volume_ratio=1.5)
+    # 6 flat + breakdown at 6 + T+1/T+2/T+3 = 10 bars
+    # Observation ends at index 8 (trigger 6 + OBSERVATION_DAYS 2).
+    # volumes[5:8] = [100, 200, 100] -> avg = 400/3
+    # volume_ratio[8] = 200 / (400/3) = 1.5  (not raw 200)
+    closes = [10.0] * 6 + [8.0, 8.0, 8.0, 8.0]
+    volumes = [100.0] * 6 + [200.0, 100.0, 200.0, 100.0]
+    fund_nav = _navs([1.0] * 6 + [0.85, 0.85, 0.85, 0.85])
+    signal_bars = _bars(closes, volumes)
+
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+
+    sell_events = [
+        e for e in result.events
+        if e.get("event_type") == "technical_breakdown"
+        and e.get("details", {}).get("judgment", {}).get("confirmed") is True
+    ]
+    assert sell_events, "Expected a confirmed sell breakdown event"
+    vr = sell_events[0]["details"]["volume_ratio"]
+    assert vr == pytest.approx(1.5), f"Expected volume_ratio ~1.5, got {vr}"
+    assert vr != 200.0, "volume_ratio should be the ratio, not raw volume"
+
+
 # ── Task 5: visible gates + incomplete window handling ────────────────────
 
 
