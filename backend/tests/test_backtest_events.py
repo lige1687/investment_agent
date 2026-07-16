@@ -192,7 +192,7 @@ def test_strategy_observes_weak_buy_candidate_instead_of_trading():
     event = BacktestEvent(
         event_type="buy_candidate",
         date=date(2026, 1, 5),
-        reason="五维买入信号闭环达到至少3项，触发分批买入判断",
+        reason="放量突破站上EXPMA，触发分批买入观察",
         details={"buy_signal": {"signal_level": "weak_buy"}},
         snapshot=PortfolioSnapshot(
             date=date(2026, 1, 5),
@@ -209,7 +209,7 @@ def test_strategy_observes_weak_buy_candidate_instead_of_trading():
     decision = RuleBasedStrategyAgent(_config()).decide(event)
 
     assert decision.action == "observe"
-    assert "弱买信号" in decision.reason or "3/5维度" in decision.reason
+    assert "观察期" in decision.reason or "EXPMA" in decision.reason
 
 
 def test_strategy_observes_account_risk_event_and_blocks_new_risk():

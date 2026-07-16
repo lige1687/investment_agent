@@ -52,29 +52,30 @@ def _config(**overrides) -> BacktestConfig:
 
 
 def test_engine_executes_buy_candidate_on_next_fund_nav_day():
+    """Buy trigger -> 2-day observation -> confirmed -> T+3 execution."""
     config = _config()
     engine = BacktestEngine(fee_model=FundFeeModel(subscription_fee_rate=0.001))
 
     result = engine.run(
         config=config,
-        # 添加更多 NAV 点以容纳 2 天观察期：买入候选 (Day 4) → 观察期 (Day 5-6) → 执行 (Day 7)
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 1.0, 1.1, 1.1, 1.1]),
+        # 6 flat bars + breakout at index 6 + 3 bars for T+1/T+2/T+3
+        fund_nav=_navs([1.0] * 9 + [1.1]),
         signal_bars=_bars(
-            closes=[10.0, 10.2, 10.4, 10.9, 11.3, 11.4, 11.4, 11.4],
-            volumes=[100.0, 100.0, 100.0, 140.0, 150.0, 120.0, 120.0, 120.0],
+            closes=[10.0] * 6 + [12.0, 12.0, 12.0, 12.0],
+            volumes=[100.0] * 6 + [150.0, 100.0, 100.0, 100.0],
         ),
     )
 
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.action == "buy"
-    assert trade.date == date(2026, 1, 7)  # T+1 执行（观察期末的下一天）
+    # Trigger at index 6 (2026-01-07) -> T+3 = index 9 (2026-01-10)
+    assert trade.date == date(2026, 1, 10)
     assert trade.nav == 1.1
-    # 现在使用分级建仓：middle_buy (4/5) 信号建仓 70% 目标仓位 = 14%
-    # buy_size = min(0.2 * 0.7, 0.2) = min(0.14, 0.2) = 0.14 = 14% = 14000
-    assert trade.cash_delta == pytest.approx(-14_000.0)
-    assert trade.fee == pytest.approx(14.0)
-    assert trade.shares == pytest.approx((14_000.0 - 14.0) / 1.1)
+    # strong_buy + neutral -> buy_scale=1.0 -> buy_size=0.2 -> spend=20000
+    assert trade.cash_delta == pytest.approx(-20_000.0)
+    assert trade.fee == pytest.approx(20.0)
+    assert trade.shares == pytest.approx((20_000.0 - 20.0) / 1.1)
     assert result.metrics.trade_count == 1
 
 
@@ -125,6 +126,10 @@ def test_engine_does_not_sell_batches_on_etf_breakdown_without_fund_batch_trigge
 
 
 def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_batch_is_losing():
+    """Sell trigger -> 2-day observation -> confirmed -> T+3 sell.
+
+    Confirmation batch has -13% return at sell time -> batch_stop_loss.
+    """
     config = _config(
         initial_position_pct=0.16,
         target_position_pct=0.2,
@@ -134,10 +139,11 @@ def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_
 
     result = engine.run(
         config=config,
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.87]),
+        # 6 flat + breakdown at 6 + T+1/T+2/T+3 = 10 bars
+        fund_nav=_navs([1.0] * 6 + [0.87, 0.87, 0.87, 0.87]),
         signal_bars=_bars(
-            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 10.0],
-            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0],
+            closes=[10.0] * 6 + [8.0, 8.0, 8.0, 8.0],
+            volumes=[100.0] * 6 + [200.0, 100.0, 100.0, 100.0],
         ),
     )
 
@@ -249,6 +255,7 @@ def test_engine_applies_sell_cooldown_after_technical_breakdown():
 
 
 def test_engine_continues_selling_during_post_sell_observation_window():
+    """Sell trigger -> observe -> T+3 sell -> post_sell_observation continues selling core."""
     config = _config(
         initial_position_pct=0.2,
         target_position_pct=0.2,
@@ -259,10 +266,11 @@ def test_engine_continues_selling_during_post_sell_observation_window():
 
     result = engine.run(
         config=config,
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83]),
+        # Extended: trigger at 4, observe 5-6, sell at 7, post-sell 8-10+
+        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.80]),
         signal_bars=_bars(
-            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6],
-            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0],
+            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3],
+            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
         ),
     )
 
@@ -273,6 +281,7 @@ def test_engine_continues_selling_during_post_sell_observation_window():
 
 
 def test_engine_restarts_post_sell_observation_after_followup_sell():
+    """Post-sell observation restarts after each follow-up sell, producing multiple core sells."""
     config = _config(
         initial_position_pct=0.2,
         target_position_pct=0.2,
@@ -283,10 +292,11 @@ def test_engine_restarts_post_sell_observation_after_followup_sell():
 
     result = engine.run(
         config=config,
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81]),
+        # Extended for multiple post-sell rounds
+        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.80, 0.79, 0.78]),
         signal_bars=_bars(
-            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4],
-            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3, 9.2, 9.1],
+            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
         ),
     )
 

@@ -33,6 +33,12 @@ def test_get_backtest_presets_api_returns_minimal_mapping_fields():
 
 
 def test_run_preset_api_uses_preset_data_sources(monkeypatch):
+    """Preset config uses default expma_window=15, buy_volume_window=20.
+
+    Data: 20 flat bars (close=10, vol=100) -> index 20 crossover (close=12,
+    vol=150, volume_ratio=1.5>=1.2) -> T+1/T+2 stay at 12 (confirmed) ->
+    T+3 execution at index 23 (2026-01-24).
+    """
     class FakeFundNavClient:
         async def fetch_nav(self, fund_code, start_date=None, end_date=None, page_size=10000, timeout=15):
             assert fund_code == "001513"
@@ -45,18 +51,29 @@ def test_run_preset_api_uses_preset_data_sources(monkeypatch):
     class FakeWestockClient:
         async def fetch_kline(self, symbol, period="day", limit=200, timeout=30):
             assert period == "day"
-            return [
-                backtest_api.SignalBar(
+            bars = []
+            # 20 flat bars: EXPMA converges to 10.0, volume_ratio computable
+            # from index 20 onward (buy_volume_window=20).
+            for day in range(1, 21):
+                bars.append(backtest_api.SignalBar(
                     date=date(2026, 1, day),
-                    open=10 + day * 0.1,
-                    high=10.3 + day * 0.1,
-                    low=9.8 + day * 0.1,
-                    close=10 + day * 0.1,
-                    volume=100 if day <= 20 else 150,
-                    amount=(10 + day * 0.1) * (100 if day <= 20 else 150),
-                )
-                for day in range(1, 26)
-            ]
+                    open=10, high=10.2, low=9.8, close=10.0,
+                    volume=100, amount=1000,
+                ))
+            # index 20 (day 21): volume breakout above EXPMA -> buy trigger
+            bars.append(backtest_api.SignalBar(
+                date=date(2026, 1, 21),
+                open=10, high=12.2, low=9.8, close=12.0,
+                volume=150, amount=1800,
+            ))
+            # T+1/T+2/T+3/T+4: stay above EXPMA (observation confirmed)
+            for day in range(22, 26):
+                bars.append(backtest_api.SignalBar(
+                    date=date(2026, 1, day),
+                    open=12, high=12.2, low=11.8, close=12.0,
+                    volume=100, amount=1200,
+                ))
+            return bars
 
     monkeypatch.setattr(backtest_api, "EastmoneyFundNavClient", lambda: FakeFundNavClient())
     monkeypatch.setattr(backtest_api, "WestockDataClient", lambda: FakeWestockClient())
@@ -76,9 +93,5 @@ def test_run_preset_api_uses_preset_data_sources(monkeypatch):
     data = response.json()
     assert data["config"]["fund_code"] == "001513"
     assert data["metrics"]["trade_count"] >= 1
-    # buy_confirmation 事件包含原始的 original_buy_signal
-    if "original_buy_signal" in data["events"][0]["details"]:
-        assert data["events"][0]["details"]["original_buy_signal"]["passed_count"] >= 3
-    else:
-        # 或者检查 buy_signal 如果它在那里
-        assert data["events"][0]["details"].get("buy_signal", {}).get("passed_count", 0) >= 3 or True
+    # buy_confirmation event is emitted after the 2-day observation window
+    assert any(e["event_type"] == "buy_confirmation" for e in data["events"])
