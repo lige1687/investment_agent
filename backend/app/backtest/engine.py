@@ -118,6 +118,7 @@ class BacktestEngine:
         scanner = TriggerScanner(config)
         judge = DeterministicJudge()
         buy_trigger_map = {t.index: t for t in scanner.scan(signal_bars) if t.kind == "buy"}
+        sell_trigger_map = {t.index: t for t in scanner.scan(signal_bars) if t.kind == "sell"}
         pending: list[tuple[BacktestEvent, StrategyDecision]] = []
         equity_curve: list[PortfolioSnapshot] = []
         trades: list[TradeRecord] = []
@@ -130,6 +131,10 @@ class BacktestEngine:
         buy_observation_start_index = -1
         buy_observation_until_index = -1
         buy_observation_candidate: TriggerPoint | None = None
+        # 卖出观察期状态（L1 触发 -> 2 天观察 -> judge -> T+3 卖）
+        sell_observation_start_index = -1
+        sell_observation_until_index = -1
+        sell_observation_candidate: TriggerPoint | None = None
         post_sell_observation_start_index = -1
         post_sell_observation_until_index = -1
         post_sell_source_event_type = ""
@@ -191,11 +196,12 @@ class BacktestEngine:
                 start_index=post_sell_observation_start_index,
                 until_index=post_sell_observation_until_index,
             )
-            # ── 买入触发与观察期（L1 机械触发 + L2 观察判定）──────────────
-            # TriggerScanner 预扫 buy 触发点；EventDetector 的 buy_candidate 被忽略
+            # ── 买入/卖出触发与观察期（L1 机械触发 + L2 观察判定）─────────
+            # TriggerScanner 预扫 buy/sell 触发点；EventDetector 的
+            # buy_candidate / technical_breakdown 被忽略（引擎用 TriggerScanner 取代）
             detector_events = [
                 e for e in detector.detect(index=index, bars=signal_bars, snapshot=snapshot)
-                if e.event_type != "buy_candidate"
+                if e.event_type not in {"buy_candidate", "technical_breakdown"}
             ]
 
             buy_confirmation_event = None
@@ -286,6 +292,101 @@ class BacktestEngine:
                         self._event_record(observe_event, decision, reporter, batch_skill_router)
                     )
 
+            # ── 卖出触发与观察期（L1 机械触发 + L2 观察判定）──────────────
+            sell_confirmation_event = None
+            sell_hold_event = None
+            in_post_sell_window = (
+                post_sell_observation_start_index <= index <= post_sell_observation_until_index
+            )
+            if sell_observation_start_index <= index <= sell_observation_until_index:
+                if index == sell_observation_until_index and sell_observation_candidate is not None:
+                    # 观察期最后一天：调 judge 判定
+                    trigger = sell_observation_candidate
+                    window_start = trigger.index + 1
+                    window_bars = signal_bars[window_start : window_start + OBSERVATION_DAYS]
+                    judgment = judge.judge(
+                        trigger, window_bars, config, all_bars=signal_bars
+                    )
+                    if judgment.confirmed and judgment.decision == "sell":
+                        sell_confirmation_event = BacktestEvent(
+                            event_type="technical_breakdown",
+                            date=signal_bars[index].date,
+                            reason=judgment.reason,
+                            details={
+                                "close": signal_bars[index].close,
+                                "expma": expma(
+                                    [b.close for b in signal_bars[: index + 1]],
+                                    config.expma_window,
+                                )[index],
+                                "volume_ratio": signal_bars[index].volume,
+                                "trigger": {
+                                    "kind": "sell",
+                                    "index": trigger.index,
+                                    "date": trigger.date.isoformat(),
+                                },
+                                "judgment": {
+                                    "confirmed": judgment.confirmed,
+                                    "gate": judgment.gate,
+                                },
+                            },
+                            snapshot=snapshot,
+                        )
+                    else:
+                        # 未确认：记录 hold + gate，重置观察期
+                        sell_hold_event = BacktestEvent(
+                            event_type="technical_breakdown",
+                            date=signal_bars[index].date,
+                            reason=judgment.reason,
+                            details={
+                                "gate": judgment.gate or "observation_not_confirmed",
+                                "trigger": {
+                                    "kind": "sell",
+                                    "index": trigger.index,
+                                    "date": trigger.date.isoformat(),
+                                },
+                                "judgment": {
+                                    "confirmed": judgment.confirmed,
+                                    "gate": judgment.gate,
+                                },
+                            },
+                            snapshot=snapshot,
+                        )
+                        sell_observation_start_index = -1
+                        sell_observation_until_index = -1
+                        sell_observation_candidate = None
+            elif (
+                index in sell_trigger_map
+                and snapshot.position_pct > 0
+                and not in_post_sell_window
+            ):
+                # 新的卖出触发：进入观察期
+                trigger = sell_trigger_map[index]
+                sell_observation_start_index = index
+                sell_observation_until_index = index + OBSERVATION_DAYS
+                sell_observation_candidate = trigger
+                if test_mode:
+                    observe_event = BacktestEvent(
+                        event_type="technical_breakdown",
+                        date=signal_bars[index].date,
+                        reason="放量跌破EXPMA，进入2天观察期",
+                        details={
+                            "trigger": {
+                                "kind": "sell",
+                                "index": trigger.index,
+                                "date": trigger.date.isoformat(),
+                            },
+                        },
+                        snapshot=snapshot,
+                    )
+                    decision = StrategyDecision(
+                        action="observe",
+                        reason="卖出信号进入2天观察期，确认是否稳定跌破",
+                        observe_days=OBSERVATION_DAYS,
+                    )
+                    events.append(
+                        self._event_record(observe_event, decision, reporter, batch_skill_router)
+                    )
+
             day_events = self._merge_batch_events(
                 detector_events,
                 batch_events + post_sell_events,
@@ -294,6 +395,10 @@ class BacktestEngine:
             # 如果有 buy_confirmation 事件，添加到事件列表
             if buy_confirmation_event:
                 day_events.append(buy_confirmation_event)
+
+            # 如果有 sell_confirmation 事件，添加到事件列表
+            if sell_confirmation_event:
+                day_events.append(sell_confirmation_event)
 
             # 记录未确认的 hold 事件
             if buy_hold_event:
@@ -304,8 +409,16 @@ class BacktestEngine:
                 events.append(
                     self._event_record(buy_hold_event, hold_decision, reporter, batch_skill_router)
                 )
+            if sell_hold_event:
+                hold_decision = StrategyDecision(
+                    action="hold",
+                    reason=sell_hold_event.reason,
+                )
+                events.append(
+                    self._event_record(sell_hold_event, hold_decision, reporter, batch_skill_router)
+                )
 
-            emitted_event = bool(buy_hold_event)
+            emitted_event = bool(buy_hold_event or sell_hold_event)
             for event in day_events:
                 is_core_protection = event.details.get("batch_protection") == "core_cost_line"
                 # 核心仓保护走独立冷却期，避免每日重复触发；但不受非核心仓卖出冷却期约束。

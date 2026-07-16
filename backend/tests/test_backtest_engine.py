@@ -560,3 +560,59 @@ def test_buy_not_confirmed_does_not_buy_and_records_gate():
         if e.get("details", {}).get("gate") == "observation_not_confirmed"
     ]
     assert gates, "Expected observation_not_confirmed gate event"
+
+
+# ── Task 4: sell path two-layer observation model ─────────────────────────
+
+
+def _build_breakdown_series(confirmed: bool = True):
+    """Build signal bars with a volume breakdown below EXPMA at index 6.
+
+    expma_window=3, buy_volume_window=3 (from _config default).
+    - 6 flat bars at close=10.0, vol=100 (EXPMA converges to 10.0)
+    - index 6: close=8.0, vol=200 -> sell trigger (volume breakdown below EXPMA)
+    - T+1/T+2: confirmed -> stays at 8.0; not confirmed -> T+1 bounces to 12.0
+    - index 9: T+3 execution day
+    Fund NAV drops to 0.85 so batch breakdown_sell_allowed triggers.
+    """
+    closes = [10.0] * 6 + [8.0]
+    volumes = [100.0] * 6 + [200.0]
+    if confirmed:
+        closes.extend([8.0, 8.0, 8.0])
+        volumes.extend([100.0, 100.0, 100.0])
+    else:
+        closes.extend([12.0, 8.0, 8.0])  # T+1 reclaims above EXPMA
+        volumes.extend([100.0, 100.0, 100.0])
+    fund_nav = _navs([1.0] * 6 + [0.85] * (len(closes) - 6))
+    return fund_nav, _bars(closes, volumes)
+
+
+def _first_sell_trigger_date(signal_bars, config):
+    from app.backtest.trigger_scanner import TriggerScanner
+
+    scanner = TriggerScanner(config)
+    triggers = scanner.scan(signal_bars)
+    sells = [t for t in triggers if t.kind == "sell"]
+    assert sells, "Expected at least one sell trigger"
+    return sells[0].date
+
+
+def test_sell_trigger_fills_on_T_plus_3_after_observation_confirms():
+    fund_nav, signal_bars = _build_breakdown_series(confirmed=True)
+    config = _config(initial_position_pct=0.2, breakdown_volume_ratio=1.5)
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    sells = [t for t in result.trades if t.action == "sell"]
+    assert len(sells) >= 1
+    trigger_date = _first_sell_trigger_date(signal_bars, config)
+    assert sells[0].date == trigger_date + timedelta(days=3)
+
+
+def test_sell_not_confirmed_does_not_sell():
+    fund_nav, signal_bars = _build_breakdown_series(confirmed=False)
+    config = _config(initial_position_pct=0.2, breakdown_volume_ratio=1.5)
+    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    assert not [t for t in result.trades if t.action == "sell"]
+    assert [
+        e for e in result.events
+        if e.get("details", {}).get("gate") == "observation_not_confirmed"
+    ]
