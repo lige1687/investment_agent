@@ -170,3 +170,46 @@ def create_specialist(
         temperature=temperature,
         role_constraints=constraints,
     )
+
+
+from app.trading_room.conversation.presets import preset_extra_skills
+from app.trading_room.conversation.schemas import PresetId
+
+
+def create_specialist_for_preset(
+    role: str,
+    *,
+    preset_id: PresetId | None = None,
+    client: LLMClient | None = None,
+    skill_registry: TradingSkillRegistry | None = None,
+) -> SpecialistRunner:
+    """Same as create_specialist but appends preset-specific extra skills.
+
+    Skills are additive; the base whitelist is unchanged.
+    """
+    try:
+        schema, skill_names, constraints = ROLE_DEFINITIONS[role]
+    except KeyError as exc:
+        raise KeyError(f"unknown trading-room specialist: {role}") from exc
+
+    extras = preset_extra_skills(preset_id, role) if preset_id else ()
+    merged_skills = tuple(dict.fromkeys((*skill_names, *extras)))
+
+    registry = skill_registry or TradingSkillRegistry(
+        trading_root=settings.trading_skill_root,
+        market_root=settings.market_skill_root,
+    )
+    temperature = (
+        settings.trading_room_chair_temperature
+        if role in {"recorder", "chair"}
+        else settings.trading_room_analysis_temperature
+    )
+    return SpecialistRunner(
+        role=role,
+        output_schema=schema,
+        client=client or get_llm_client(role),
+        skill_registry=registry,
+        skill_names=merged_skills,
+        temperature=temperature,
+        role_constraints=constraints,
+    )
