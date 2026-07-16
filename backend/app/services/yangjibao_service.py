@@ -1,9 +1,9 @@
 """Yangjibao business service."""
+
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.yangjibao import YangjibaoToken
-from app.yangjibao.client import YangjibaoClient
 from app.yangjibao.auth import qr_manager, QRStatus
 from app.yangjibao.portfolio import PortfolioSync
 
@@ -21,18 +21,26 @@ class YangjibaoService:
     async def get_status(self) -> dict:
         """Check connection status."""
         # Check if we have a stored token
-        stmt = select(YangjibaoToken).order_by(YangjibaoToken.created_at.desc()).limit(1)
+        stmt = (
+            select(YangjibaoToken).order_by(YangjibaoToken.created_at.desc()).limit(1)
+        )
         result = await self._db.execute(stmt)
         token_record = result.scalar_one_or_none()
 
         return {
             "connected": token_record is not None,
             "has_active_session": qr_manager.active_session is not None,
-            "qr_status": qr_manager.active_session.status.value if qr_manager.active_session else None,
+            "qr_status": (
+                qr_manager.active_session.status.value
+                if qr_manager.active_session
+                else None
+            ),
         }
 
     async def _get_stored_token(self) -> str | None:
-        stmt = select(YangjibaoToken).order_by(YangjibaoToken.created_at.desc()).limit(1)
+        stmt = (
+            select(YangjibaoToken).order_by(YangjibaoToken.created_at.desc()).limit(1)
+        )
         result = await self._db.execute(stmt)
         record = result.scalar_one_or_none()
         return record.access_token if record else None
@@ -57,11 +65,13 @@ class YangjibaoService:
 
         if session.status == QRStatus.CONFIRMED and session.access_token:
             # Save token to DB
-            self._db.add(YangjibaoToken(
-                access_token=session.access_token,
-                token_type="bearer",
-                raw_response=str({"source": "qr_login"}),
-            ))
+            self._db.add(
+                YangjibaoToken(
+                    access_token=session.access_token,
+                    token_type="bearer",
+                    raw_response=str({"source": "qr_login"}),
+                )
+            )
             await self._db.flush()
             result["connected"] = True
             qr_manager.reset()
@@ -98,7 +108,9 @@ class YangjibaoService:
         codes = [p.symbol for p in positions]
         name_map = {}
         if codes:
-            stmt2 = select(FundProfile.code, FundProfile.name).where(FundProfile.code.in_(codes))
+            stmt2 = select(FundProfile.code, FundProfile.name).where(
+                FundProfile.code.in_(codes)
+            )
             result2 = await self._db.execute(stmt2)
             name_map = {code: name for code, name in result2.all()}
 
@@ -129,3 +141,9 @@ class YangjibaoService:
                 for p in positions
             ],
         }
+
+    async def get_live_valuation(self) -> list[dict]:
+        """Live portfolio valuation, delegating to PortfolioValuationService."""
+        from app.services.portfolio_valuation_service import PortfolioValuationService
+
+        return await PortfolioValuationService(self._db).get_live_valuation()

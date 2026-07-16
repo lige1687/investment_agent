@@ -1,14 +1,29 @@
-"""Strategy 1: Direct API access to THS (Tonghuashun) HTTP APIs.
+"""Strategy 1: Direct API access to eastmoney HTTP APIs.
 
 Fast and free. Used for real-time market data, K-line, indices, and sector data.
 """
+
+import asyncio
 import logging
 from typing import Any
+
 import httpx
+
 from app.config import settings
+from app.services.global_index_provider import DataUnavailable, GlobalIndexProvider
+from app.services.market_data_trust import validate_quote_rows
 from app.skills.base import SkillRequest, SkillResult, SkillStrategy
 
 logger = logging.getLogger(__name__)
+
+# eastmoney realtime stock/ETF quote endpoint (absolute URL; do NOT use the
+# THS base_url client for these).
+_EASTMONEY_STOCK_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+_EASTMONEY_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+_QUOTE_CHUNK_SIZE = 8  # cap concurrent quote requests to avoid bursts
 
 # Skills this strategy can handle
 DIRECT_API_SKILLS = {
@@ -50,7 +65,11 @@ class DirectAPIStrategy(SkillStrategy):
     async def execute(self, request: SkillRequest) -> SkillResult:
         handler = self._get_handler(request.skill_name)
         if handler is None:
-            return SkillResult(success=False, error=f"No handler for {request.skill_name}", strategy_used="direct_api")
+            return SkillResult(
+                success=False,
+                error=f"No handler for {request.skill_name}",
+                strategy_used="direct_api",
+            )
 
         try:
             data = await handler(**request.params)
@@ -59,7 +78,9 @@ class DirectAPIStrategy(SkillStrategy):
             logger.error(f"Direct API error for {request.skill_name}: {e}")
             return SkillResult(success=False, error=str(e), strategy_used="direct_api")
         except Exception as e:
-            logger.error(f"Unexpected error in direct_api for {request.skill_name}: {e}")
+            logger.error(
+                f"Unexpected error in direct_api for {request.skill_name}: {e}"
+            )
             return SkillResult(success=False, error=str(e), strategy_used="direct_api")
 
     def _get_handler(self, skill_name: str):
@@ -73,21 +94,82 @@ class DirectAPIStrategy(SkillStrategy):
         }
         return handlers.get(skill_name)
 
-    async def _fetch_quotes(self, symbols: list[str]) -> dict[str, Any]:
-        """Fetch real-time quotes for given symbols.
+    async def _fetch_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Fetch real-time quotes for given stock/ETF symbols via eastmoney.
 
-        NOTE: This is a STUB implementation. The actual THS API endpoint
-        and authentication method need to be verified via packet capture.
+        Symbols use unprefixed app codes (e.g. ``510050``, ``159915``). The
+        eastmoney secid prefix is derived from the first digit: ``5/6/9`` ->
+        Shanghai (``1.``), otherwise Shenzhen (``0.``).
+
+        Returns a list of unified rows ``{symbol, code, name, price, change,
+        change_pct}``. Individual symbol failures are skipped; if every symbol
+        fails or is rejected by validation, :class:`DataUnavailable` propagates
+        so the strategy reports failure (fail-closed).
         """
-        client = await self._get_client()
-        # TODO: Replace with actual THS API endpoint after verification
-        # Expected endpoint pattern: /api/quotes?codes=510050,159915
-        response = await client.get(
-            "/api/quotes",
-            params={"codes": ",".join(symbols)},
-        )
-        response.raise_for_status()
-        return response.json()
+        if not symbols:
+            return []
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            headers={"User-Agent": _EASTMONEY_UA, "Accept": "application/json"},
+        ) as client:
+            fetched: list[dict[str, Any] | None] = []
+            for i in range(0, len(symbols), _QUOTE_CHUNK_SIZE):
+                chunk = symbols[i : i + _QUOTE_CHUNK_SIZE]
+                fetched.extend(
+                    await asyncio.gather(
+                        *(self._fetch_one_quote(client, s) for s in chunk)
+                    )
+                )
+
+        quotes = [q for q in fetched if q is not None]
+        valid, rejected = validate_quote_rows(quotes)
+        for sym in rejected:
+            logger.debug("quote row rejected by trust validation: %s", sym)
+
+        if not valid:
+            raise DataUnavailable("all quote rows failed or rejected validation")
+        return valid
+
+    @staticmethod
+    def _secid_for_symbol(symbol: str) -> str:
+        """Build an eastmoney secid for a stock/ETF symbol (unprefixed code)."""
+        code = symbol.strip()
+        if code and code[0] in ("5", "6", "9"):
+            return f"1.{code}"
+        return f"0.{code}"
+
+    async def _fetch_one_quote(
+        self, client: httpx.AsyncClient, symbol: str
+    ) -> dict[str, Any] | None:
+        """Fetch a single realtime quote. Returns ``None`` on any per-symbol failure."""
+        secid = self._secid_for_symbol(symbol)
+        params = {"secid": secid, "fields": "f43,f57,f58,f169,f170", "fltt": 2}
+        try:
+            resp = await client.get(_EASTMONEY_STOCK_URL, params=params)
+        except httpx.HTTPError:
+            logger.warning("eastmoney stock get failed for %s", symbol)
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "eastmoney stock get status %s for %s", resp.status_code, symbol
+            )
+            return None
+        try:
+            payload = resp.json()
+        except ValueError:
+            return None
+        data = (payload or {}).get("data") or {}
+        if not data:
+            return None
+        return {
+            "symbol": symbol,
+            "code": str(data.get("f57") or symbol),
+            "name": str(data.get("f58") or ""),
+            "price": data.get("f43"),
+            "change": data.get("f169"),
+            "change_pct": data.get("f170"),
+        }
 
     async def _fetch_kline(
         self,
@@ -112,15 +194,31 @@ class DirectAPIStrategy(SkillStrategy):
         response.raise_for_status()
         return response.json()
 
-    async def _fetch_indices(self, codes: list[str] | None = None) -> dict[str, Any]:
-        """Fetch major index quotes.
+    async def _fetch_indices(
+        self, codes: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Fetch major index quotes via the eastmoney-backed GlobalIndexProvider.
 
-        Default indices: SSE Composite, CSI 300, ChiNext, STAR 50
+        Returns a list of unified rows directly so ``SkillResult.data`` is a
+        list (``MarketService.get_global_indices`` checks
+        ``isinstance(result.data, list)``). On :class:`DataUnavailable` the
+        exception propagates; ``execute`` wraps it into ``SkillResult(success=False)``.
         """
         if codes is None:
-            codes = ["000001", "000300", "399006", "000688"]
-
-        return await self._fetch_quotes(codes)
+            codes = [
+                "000001",
+                "399001",
+                "000300",
+                "399006",
+                "000688",
+                "HSI",
+                "N225",
+                "KOSPI",
+                "IXIC",
+                "SPX",
+                "DJI",
+            ]
+        return await GlobalIndexProvider().get_indices(codes)
 
     async def _fetch_sector_data(
         self,

@@ -1,4 +1,6 @@
 """Feishu bot configuration API."""
+
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends
@@ -40,15 +42,29 @@ def mask_webhook_url(value: str) -> str:
 
 def should_route_to_sector_detail(message: str) -> bool:
     text = message.lower()
-    sector_words = ["半导体", "芯片", "通信", "光模块", "有色", "电池", "消费", "港股", "纳指", "美股"]
+    sector_words = [
+        "半导体",
+        "芯片",
+        "通信",
+        "光模块",
+        "有色",
+        "电池",
+        "消费",
+        "港股",
+        "纳指",
+        "美股",
+    ]
     detail_words = ["为什么", "为啥", "原因", "有机会", "机会", "回避", "风险", "观察"]
-    return any(word in text for word in sector_words) and any(word in text for word in detail_words)
+    return any(word in text for word in sector_words) and any(
+        word in text for word in detail_words
+    )
 
 
 @router.get("/config")
 async def get_config(db: AsyncSession = Depends(get_db)):
     """Get Feishu bot configuration."""
     from sqlalchemy import select
+
     stmt = select(FeishuConfig).order_by(FeishuConfig.created_at.desc()).limit(1)
     result = await db.execute(stmt)
     config = result.scalar_one_or_none()
@@ -158,7 +174,9 @@ async def dev_ask(req: DevAskRequest, db: AsyncSession = Depends(get_db)):
     context_service = AgentContextService(db)
     if should_route_to_sector_detail(req.message):
         snapshot = await context_service.find_recent_relevant_snapshot(req.message)
-        result = await SectorDetailAgent().explain(question=req.message, snapshot=snapshot)
+        result = await SectorDetailAgent().explain(
+            question=req.message, snapshot=snapshot
+        )
         return {
             "ok": True,
             "message": req.message,
@@ -184,6 +202,7 @@ async def dev_ask(req: DevAskRequest, db: AsyncSession = Depends(get_db)):
 async def push_us_overnight_now():
     """Manually trigger 09:20 US overnight skill summary."""
     from app.tasks.daily_summary import us_overnight_push
+
     return await us_overnight_push()
 
 
@@ -191,6 +210,7 @@ async def push_us_overnight_now():
 async def push_morning_now():
     """Manually trigger 12:05 morning session skill summary."""
     from app.tasks.daily_summary import morning_session_push
+
     return await morning_session_push()
 
 
@@ -198,4 +218,38 @@ async def push_morning_now():
 async def push_tail_now():
     """Manually trigger 14:35 tail session skill summary."""
     from app.tasks.daily_summary import tail_session_push
+
     return await tail_session_push()
+
+
+# Title lookup shared by the preview endpoint.
+_SUMMARY_TITLES = {
+    "us_overnight": "🇺🇸 前夜美股总结 | 09:20",
+    "morning": "🌤️ 早盘总结 | 12:05",
+    "tail": "🌗 尾盘总结 | 14:35",
+}
+
+
+@router.get("/preview")
+async def preview_skill_summary(
+    summary_type: Literal["us_overnight", "morning", "tail"] = "us_overnight",
+):
+    """Debug endpoint: preview a skill summary WITHOUT pushing to Feishu.
+
+    Returns the message body and data-source ``meta`` so the real-data path
+    can be verified without waiting for the scheduled push. Does NOT apply the
+    ``is_trading_day()`` or ``feishu_bot.configured`` gates and does NOT call
+    ``feishu_bot.send_text``.
+    """
+    from app.tasks.daily_summary import generate_skill_summary
+
+    title = _SUMMARY_TITLES[summary_type]
+    result = await generate_skill_summary(summary_type, title)
+    return {
+        "summary_type": result["summary_type"],
+        "title": result["title"],
+        "message": result["message"],
+        "used_fallback": result["used_fallback"],
+        "reason": result["reason"],
+        "meta": result["meta"],
+    }
