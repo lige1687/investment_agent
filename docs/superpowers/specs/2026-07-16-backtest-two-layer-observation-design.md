@@ -161,7 +161,7 @@ backend/app/backtest/
 ## 8. 分阶段实施
 
 - **Phase 0（P0，先解封）**：L1 机械触发 + 2 天观察骨架（**确定性**，judge 先用占位规则：窗口内站稳/稳定跌破即 confirmed）。买点能按模型成交、卖点改先观察再卖。删 `buy_cooldown` 死代码、修末段 bar 丢确认、MA 统一 15EXPMA。可跑可测，不依赖 LLM。
-- **Phase 1**：接 `ObservationJudge`（真 LLM + 缓存）替换占位规则；`VolumeThresholdProvider` 接 skill；`strategy_compiler_agent` 改走 registry。
+- **Phase 1**：接 `ObservationJudge`（真 LLM + 缓存）替换占位规则；`VolumeThresholdProvider` 接 skill；`strategy_compiler_agent` 改走 registry；**卖侧按 §11 重构为"风险出口 + regime 分级止盈"**（per-sector regime skill 驱动牛 trailing / 熊 gain-ladder，风险出口最高优先）。
 - **Phase 2**：补"逻辑/催化"真实数据源（景气度/公告 skill）、"资金回流"真·资金流向数据；多标的组合支持（修"组合允许"半真）；引擎上帝类拆分、执行日志不再写临时文件、metrics 加 benchmark/Sharpe。
 
 ## 9. 明确不做（防范围蔓延）
@@ -180,3 +180,35 @@ backend/app/backtest/
 - **LLM 判断质量**：DeepSeek 结构化输出稳定性；失败语义沿用现有（重试一次 -> 标 unavailable -> hold）。
 - **缓存膨胀**：按触发点缓存，量级稀疏，无虞；但需定期清理过期 skill 版本对应的旧缓存。
 - **假维度风险**：Phase 0/1 降权留空"逻辑/催化"，LLM 判断会缺一维；需在输出里显式标 `data_status=missing`，不让 LLM 把"没数据"当成"不通过"。
+
+## 11. Phase 1 卖侧设计：风险出口 + regime 分级止盈
+
+Phase 0 真实数据验证暴露：买侧已按模型成交，但**卖侧新模型 dormant**--批次止盈保护（`profit_drawdown`）触发即卖、在所有 regime 里都动手，抢先于"跌破观察"路径，且过度交易（通信 ETF 一年 19 笔/1% 收益，还在 -2%/-5%/-13% 时按"止盈"卖出）。Phase 1 卖侧按用户确认的**两层卖 + regime 分级止盈**重构。
+
+### 11.1 两层卖
+
+| 层 | 触发 | 行为 | 优先级 |
+|---|---|---|---|
+| **风险出口** | 放量跌破 15EXPMA | 观察 2 天确认稳定跌破 -> 卖（Phase 0 已实现） | **最高，always-on，不分级** |
+| **止盈** | regime 驱动 | 牛=高点回撤 trailing；熊=分批直接（gain-ladder） | 风险出口未触发时才作用 |
+
+- 风险出口永远最高：趋势破了不管浮盈多少先跑；止盈只在趋势没破时作用。
+- 解 dormant：止盈有独立驱动（regime），不再和"跌破观察"抢同一条路。
+- 解过度交易：分批直接止盈**只在熊市**用，牛市改 trailing，牛市不折腾。
+
+### 11.2 regime 分级止盈
+
+- **牛市**：高点回撤 trailing--让利润跑，从峰值回撤 X% 才卖（复用 `profit_drawdown` 逻辑，牛市专属 + 阈值偏松）。
+- **熊市**：分批直接止盈（gain-ladder）--到 +X% 浮盈主动卖一个批次，剩余继续跑，到下一个阈值再卖一批，**不等回撤**。阈值按赛道/仓位定位不同（例：某赛道 +20% 卖一批、+30% 再卖一批）。
+- 批次 = 现有 `HoldingBatch` 档位（core/confirmation/high_position）；gain-ladder "卖一批" = 卖一个档位。
+
+### 11.3 regime 信号（关键依赖）
+
+- regime 由**专业 skill** 判断，**按赛道**（科技可能牛市、同期其他主题熊市），不是账户级一刀切。
+- 现有 `batch-trading-market-regime` skill 已输出 regime + **"take-profit tightness guidance"**，硬规则即"牛市别过早卖核心、熊市别把反弹当新高"--与本设计高度吻合。**gap**：它当前是账户/市场级，Phase 1 需**扩展成 per-sector**，或结合 signal-ETF 的赛道趋势派生赛道级 regime。
+- regime 随时间变（一年内赛道可能牛转熊），需**按观察窗口**评估并缓存（键含 赛道+日期+skill 版本），保可复现。
+- regime 同时驱动**买侧**降档（`_decide_buy` 的 bear 降档逻辑 Phase 0 已编码但被硬编码 neutral 关闭）--买/卖共用同一 regime 信号，Phase 1 统一接上。
+
+### 11.4 阈值外置
+
+- gain-ladder 阈值（+X%/+Y%）与 trailing 回撤% 按**赛道/仓位定位**不同，从 skill/config 提供，不再硬编码在引擎方法体（顺带解 review #7 的魔法数问题）。
