@@ -130,7 +130,7 @@ async def ask(
     # 立即写一条 user 消息（前端能立刻回显）
     await store.add_message(
         conversation_id, sender_role="user",
-        content=(request.text or f"[快捷] {request.preset_id.value}" if request.preset_id else "?"),
+        content=(request.text or (f"[快捷] {request.preset_id.value}" if request.preset_id else "?")),
         payload={"turn_id": turn_id, "kind": "text",
                  "payload": {"text": request.text, "preset_id":
                              request.preset_id.value if request.preset_id else None}},
