@@ -28,6 +28,7 @@ from app.backtest.observation.judge import (
 )
 from app.backtest.observation.regime import SectorRegime, SectorRegimeProvider
 from app.backtest.observation.schemas import ObservationJudgment
+from app.backtest.profit_taking import should_suppress_profit_taking
 from app.backtest.report_agent import ReportAgent
 from app.backtest.strategy import RuleBasedStrategyAgent, StrategyDecision
 from app.backtest.trigger_engine import TriggerEngine, TriggerSignal
@@ -235,12 +236,34 @@ class BacktestEngine:
             if index >= len(fund_nav) - 1:
                 continue
 
-            # 在观察期内不再触发新的核心仓保护，避免重复折半
-            batch_events = (
-                []
-                if post_sell_observation_start_index
+            # ── 两层卖：风险出口优先，止盈被压制时不抢（spec §11.1）─────────
+            # 风险出口（跌破观察）进行中或当日已执行风险出口卖出时，压制止盈。
+            # 止盈在趋势未破时独立触发，不依赖跌破观察路径，避免反向 dormancy。
+            in_post_sell_window = (
+                post_sell_observation_start_index
                 <= index
                 <= post_sell_observation_until_index
+            )
+            sell_trigger_today = (
+                index in sell_trigger_map
+                and snapshot.position_pct > 0
+                and not in_post_sell_window
+            )
+            risk_exit_executed_today = any(
+                e.event_type == "technical_breakdown" for e in executed_sell_events
+            )
+            _sell_obs_active = (
+                sell_observation_start_index <= index <= sell_observation_until_index
+                or sell_trigger_today
+            )
+            _suppress_profit = should_suppress_profit_taking(
+                sell_observation_active=_sell_obs_active,
+                risk_exit_triggered_today=risk_exit_executed_today,
+                post_sell_observation_active=in_post_sell_window,
+            )
+            batch_events = (
+                []
+                if _suppress_profit
                 else self._detect_batch_profit_protection(
                     nav_point, snapshot, batches, index, signal_bars, config
                 )
@@ -259,12 +282,17 @@ class BacktestEngine:
             # ── 买入/卖出触发与观察期（L1 机械触发 + L2 观察判定）─────────
             # TriggerScanner 预扫 buy/sell 触发点；EventDetector 的
             # buy_candidate / technical_breakdown 被忽略（引擎用 TriggerScanner 取代）
+            # 风险出口进行中/当日已执行时，也过滤掉 EventDetector 的
+            # profit_drawdown（账户级止盈），确保两层卖优先级。
+            _filtered_event_types = {"buy_candidate", "technical_breakdown"}
+            if _sell_obs_active or risk_exit_executed_today:
+                _filtered_event_types.add("profit_drawdown")
             detector_events = [
                 e
                 for e in detector.detect(
                     index=index, bars=signal_bars, snapshot=snapshot
                 )
-                if e.event_type not in {"buy_candidate", "technical_breakdown"}
+                if e.event_type not in _filtered_event_types
             ]
 
             buy_confirmation_event = None
@@ -368,11 +396,6 @@ class BacktestEngine:
             # ── 卖出触发与观察期（L1 机械触发 + L2 观察判定）──────────────
             sell_confirmation_event = None
             sell_hold_event = None
-            in_post_sell_window = (
-                post_sell_observation_start_index
-                <= index
-                <= post_sell_observation_until_index
-            )
             if sell_observation_start_index <= index <= sell_observation_until_index:
                 if (
                     index == sell_observation_until_index
