@@ -27,13 +27,11 @@ class ObservationJudge(Protocol):
     Phase 0: DeterministicJudge
     Phase 1: LLMObserverJudge (swaps in, engine zero-change)
 
-    Phase 1a keeps the protocol signature synchronous; LLMObserverJudge.judge
-    is async (Python structural protocols don't enforce signatures).  Task 3
-    makes the protocol and DeterministicJudge async so the engine can await
-    either implementation uniformly.
+    The method is async so LLM-backed judges can await the registry client
+    without the engine caring which implementation it holds.
     """
 
-    def judge(
+    async def judge(
         self,
         trigger: TriggerPoint,
         window_bars: list[SignalBar],
@@ -50,7 +48,9 @@ class DeterministicJudge:
     sell: window bars all have close <= EXPMA -> confirmed
     """
 
-    def judge(
+    PROMPT_VERSION = "deterministic-v1"
+
+    async def judge(
         self,
         trigger: TriggerPoint,
         window_bars: list[SignalBar],

@@ -4,7 +4,12 @@ import pytest
 
 from app.backtest.engine import BacktestEngine
 from app.backtest.fees import FundFeeModel
-from app.backtest.models import BacktestConfig, FundNavPoint, ProsperityConfig, SignalBar
+from app.backtest.models import (
+    BacktestConfig,
+    FundNavPoint,
+    ProsperityConfig,
+    SignalBar,
+)
 
 
 def _navs(values: list[float]) -> list[FundNavPoint]:
@@ -51,12 +56,13 @@ def _config(**overrides) -> BacktestConfig:
     return BacktestConfig(**values)
 
 
-def test_engine_executes_buy_candidate_on_next_fund_nav_day():
+@pytest.mark.asyncio
+async def test_engine_executes_buy_candidate_on_next_fund_nav_day():
     """Buy trigger -> 2-day observation -> confirmed -> T+3 execution."""
     config = _config()
     engine = BacktestEngine(fee_model=FundFeeModel(subscription_fee_rate=0.001))
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         # 6 flat bars + breakout at index 6 + 3 bars for T+1/T+2/T+3
         fund_nav=_navs([1.0] * 9 + [1.1]),
@@ -79,11 +85,12 @@ def test_engine_executes_buy_candidate_on_next_fund_nav_day():
     assert result.metrics.trade_count == 1
 
 
-def test_engine_sells_high_position_batch_first_after_profit_peak_drawdown():
+@pytest.mark.asyncio
+async def test_engine_sells_high_position_batch_first_after_profit_peak_drawdown():
     config = _config(initial_position_pct=0.8, target_position_pct=0.8)
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.1, 1.3, 1.2, 1.18]),
         signal_bars=_bars(
@@ -104,7 +111,8 @@ def test_engine_sells_high_position_batch_first_after_profit_peak_drawdown():
     assert result.metrics.final_equity > 100_000.0
 
 
-def test_engine_does_not_sell_batches_on_etf_breakdown_without_fund_batch_trigger():
+@pytest.mark.asyncio
+async def test_engine_does_not_sell_batches_on_etf_breakdown_without_fund_batch_trigger():
     config = _config(
         initial_position_pct=0.2,
         target_position_pct=0.2,
@@ -112,7 +120,7 @@ def test_engine_does_not_sell_batches_on_etf_breakdown_without_fund_batch_trigge
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0] * 6),
         signal_bars=_bars(
@@ -125,7 +133,8 @@ def test_engine_does_not_sell_batches_on_etf_breakdown_without_fund_batch_trigge
     assert sells == []
 
 
-def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_batch_is_losing():
+@pytest.mark.asyncio
+async def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_batch_is_losing():
     """Sell trigger -> 2-day observation -> confirmed -> T+3 sell.
 
     Confirmation batch has -13% return at sell time -> batch_stop_loss.
@@ -137,7 +146,7 @@ def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         # 6 flat + breakdown at 6 + T+1/T+2/T+3 = 10 bars
         fund_nav=_navs([1.0] * 6 + [0.87, 0.87, 0.87, 0.87]),
@@ -155,11 +164,12 @@ def test_engine_labels_confirmation_breakdown_sell_as_batch_stop_loss_when_fund_
     assert "批次止损" in sell.reason
 
 
-def test_engine_does_not_take_profit_confirmation_batch_without_fund_batch_profit():
+@pytest.mark.asyncio
+async def test_engine_does_not_take_profit_confirmation_batch_without_fund_batch_profit():
     config = _config(initial_position_pct=0.3, target_position_pct=0.3)
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.2, 1.0, 0.98, 0.97]),
         signal_bars=_bars(
@@ -172,7 +182,8 @@ def test_engine_does_not_take_profit_confirmation_batch_without_fund_batch_profi
     assert all(sell.batch_type != "confirmation" for sell in sells)
 
 
-def test_engine_protects_confirmation_batch_when_own_profit_returns_near_cost_line():
+@pytest.mark.asyncio
+async def test_engine_protects_confirmation_batch_when_own_profit_returns_near_cost_line():
     config = _config(
         initial_position_pct=0.16,
         target_position_pct=0.2,
@@ -180,7 +191,7 @@ def test_engine_protects_confirmation_batch_when_own_profit_returns_near_cost_li
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.061, 1.01, 1.01, 1.01]),
         signal_bars=_bars(
@@ -207,11 +218,12 @@ def test_engine_protects_confirmation_batch_when_own_profit_returns_near_cost_li
     assert "动态止盈" in core_sell.reason
 
 
-def test_engine_keeps_remaining_core_shares_after_half_core_take_profit():
+@pytest.mark.asyncio
+async def test_engine_keeps_remaining_core_shares_after_half_core_take_profit():
     config = _config(initial_position_pct=0.1, target_position_pct=0.2)
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 2.0, 1.4, 1.4, 1.4]),
         signal_bars=_bars(
@@ -225,14 +237,16 @@ def test_engine_keeps_remaining_core_shares_after_half_core_take_profit():
     assert sells[0].batch_type == "core"
     assert sells[0].shares == pytest.approx(5_000.0)
     sell_index = next(
-        index for index, snapshot in enumerate(result.equity_curve)
+        index
+        for index, snapshot in enumerate(result.equity_curve)
         if snapshot.date == sells[0].date
     )
     assert result.equity_curve[sell_index].shares == pytest.approx(5_000.0)
     assert result.equity_curve[sell_index].equity == pytest.approx(104_000.0)
 
 
-def test_engine_applies_sell_cooldown_after_technical_breakdown():
+@pytest.mark.asyncio
+async def test_engine_applies_sell_cooldown_after_technical_breakdown():
     config = _config(
         initial_position_pct=0.4,
         target_position_pct=0.4,
@@ -241,7 +255,7 @@ def test_engine_applies_sell_cooldown_after_technical_breakdown():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0] * 8),
         signal_bars=_bars(
@@ -254,7 +268,8 @@ def test_engine_applies_sell_cooldown_after_technical_breakdown():
     assert sells == []
 
 
-def test_engine_continues_selling_during_post_sell_observation_window():
+@pytest.mark.asyncio
+async def test_engine_continues_selling_during_post_sell_observation_window():
     """Sell trigger -> observe -> T+3 sell -> post_sell_observation continues selling core."""
     config = _config(
         initial_position_pct=0.2,
@@ -264,23 +279,42 @@ def test_engine_continues_selling_during_post_sell_observation_window():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         # Extended: trigger at 4, observe 5-6, sell at 7, post-sell 8-10+
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.80]),
+        fund_nav=_navs(
+            [1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.80]
+        ),
         signal_bars=_bars(
             closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3],
-            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            volumes=[
+                100.0,
+                100.0,
+                100.0,
+                120.0,
+                220.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+            ],
         ),
     )
 
     sells = [trade for trade in result.trades if trade.action == "sell"]
     assert [sell.batch_type for sell in sells[:2]] == ["high_position", "confirmation"]
-    assert any(sell.batch_type == "core" and sell.event_type == "post_sell_observation" for sell in sells)
+    assert any(
+        sell.batch_type == "core" and sell.event_type == "post_sell_observation"
+        for sell in sells
+    )
     assert any("卖后观察窗口" in sell.reason for sell in sells)
 
 
-def test_engine_restarts_post_sell_observation_after_followup_sell():
+@pytest.mark.asyncio
+async def test_engine_restarts_post_sell_observation_after_followup_sell():
     """Post-sell observation restarts after each follow-up sell, producing multiple core sells."""
     config = _config(
         initial_position_pct=0.2,
@@ -290,25 +324,74 @@ def test_engine_restarts_post_sell_observation_after_followup_sell():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         # Extended for multiple post-sell rounds
-        fund_nav=_navs([1.0, 1.0, 1.0, 1.0, 0.87, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.80, 0.79, 0.78]),
+        fund_nav=_navs(
+            [
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                0.87,
+                0.86,
+                0.85,
+                0.84,
+                0.83,
+                0.82,
+                0.81,
+                0.80,
+                0.79,
+                0.78,
+            ]
+        ),
         signal_bars=_bars(
-            closes=[10.0, 10.2, 10.4, 10.8, 10.1, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3, 9.2, 9.1],
-            volumes=[100.0, 100.0, 100.0, 120.0, 220.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            closes=[
+                10.0,
+                10.2,
+                10.4,
+                10.8,
+                10.1,
+                9.9,
+                9.8,
+                9.7,
+                9.6,
+                9.5,
+                9.4,
+                9.3,
+                9.2,
+                9.1,
+            ],
+            volumes=[
+                100.0,
+                100.0,
+                100.0,
+                120.0,
+                220.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+            ],
         ),
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert len(core_sells) >= 2
     assert all(trade.event_type == "post_sell_observation" for trade in core_sells)
 
 
-def test_engine_protects_core_batch_when_profit_collapses_to_cost_line():
+@pytest.mark.asyncio
+async def test_engine_protects_core_batch_when_profit_collapses_to_cost_line():
     """核心仓从高位浮盈回吐至成本线附近时，必须触发半仓保护卖出。
 
     场景：initial_position_pct=0.1, target_position_pct=0.2
@@ -324,7 +407,7 @@ def test_engine_protects_core_batch_when_profit_collapses_to_cost_line():
 
     # NAV 路径：1.0 → 1.15（core peak=15%）→ 1.005（core current=0.5%）
     # 命中核心仓成本线保护：peak>=10 且 current<=1.5
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.15, 1.005, 1.005, 1.005]),
         signal_bars=_bars(
@@ -334,7 +417,8 @@ def test_engine_protects_core_batch_when_profit_collapses_to_cost_line():
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert core_sells, "核心仓应该在成本线保护事件触发时卖出半仓"
@@ -345,7 +429,8 @@ def test_engine_protects_core_batch_when_profit_collapses_to_cost_line():
     assert first_core_sell.shares == pytest.approx(5_000.0)
 
 
-def test_engine_core_protection_not_blocked_by_sell_cooldown():
+@pytest.mark.asyncio
+async def test_engine_core_protection_not_blocked_by_sell_cooldown():
     """卖出冷却期激活时，核心仓成本线保护事件仍能触发卖出，不被冷却期阻断。
 
     场景：只 seed 核心仓（initial=0.1, target=0.2），
@@ -360,7 +445,7 @@ def test_engine_core_protection_not_blocked_by_sell_cooldown():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.15, 1.005, 1.005, 1.005, 1.005]),
         signal_bars=_bars(
@@ -370,13 +455,15 @@ def test_engine_core_protection_not_blocked_by_sell_cooldown():
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert core_sells, "核心仓保护事件应绕过冷却期直接触发卖出"
 
 
-def test_engine_core_tier1_high_peak_takeprofit_triggers_before_cost_line():
+@pytest.mark.asyncio
+async def test_engine_core_tier1_high_peak_takeprofit_triggers_before_cost_line():
     """核心仓 tier1 高位止盈：peak≥50% 且回撤≥15% 就触发，不必等到成本线。
 
     场景：核心仓 NAV 1.0 → 1.6（peak=60%）→ 1.4（回撤 20%），
@@ -388,7 +475,7 @@ def test_engine_core_tier1_high_peak_takeprofit_triggers_before_cost_line():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.6, 1.4, 1.4, 1.4]),
         signal_bars=_bars(
@@ -398,7 +485,8 @@ def test_engine_core_tier1_high_peak_takeprofit_triggers_before_cost_line():
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert core_sells, "核心仓应在 tier1（高位止盈）就触发，无需等成本线"
@@ -408,7 +496,8 @@ def test_engine_core_tier1_high_peak_takeprofit_triggers_before_cost_line():
     assert "tier1" in first_sell.reason
 
 
-def test_engine_core_tier2_mid_peak_takeprofit_triggers_on_moderate_drawdown():
+@pytest.mark.asyncio
+async def test_engine_core_tier2_mid_peak_takeprofit_triggers_on_moderate_drawdown():
     """核心仓 tier2 中位止盈：peak≥20% 且回撤≥12% 触发。
 
     场景：核心仓 NAV 1.0 → 1.25（peak=25%）→ 1.10（回撤 15%），
@@ -420,7 +509,7 @@ def test_engine_core_tier2_mid_peak_takeprofit_triggers_on_moderate_drawdown():
     )
     engine = BacktestEngine()
 
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.25, 1.10, 1.10, 1.10]),
         signal_bars=_bars(
@@ -430,7 +519,8 @@ def test_engine_core_tier2_mid_peak_takeprofit_triggers_on_moderate_drawdown():
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert core_sells, "核心仓应在 tier2（中位止盈）触发"
@@ -440,7 +530,8 @@ def test_engine_core_tier2_mid_peak_takeprofit_triggers_on_moderate_drawdown():
     assert "tier2" in first_sell.reason
 
 
-def test_engine_core_stop_loss_clears_full_core_position():
+@pytest.mark.asyncio
+async def test_engine_core_stop_loss_clears_full_core_position():
     """核心仓曾经浮盈但后续深度回撤触发止损清仓。
 
     前置条件：peak≥5%（曾经浮盈），然后回撤到 -8% 以下才触发止损，
@@ -454,7 +545,7 @@ def test_engine_core_stop_loss_clears_full_core_position():
     engine = BacktestEngine()
 
     # NAV 路径：1.0 → 1.08（peak=8%）→ 0.9（current=-10%）
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.08, 0.9, 0.9, 0.9]),
         signal_bars=_bars(
@@ -464,7 +555,8 @@ def test_engine_core_stop_loss_clears_full_core_position():
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
     assert core_sells, "核心仓应触发止损清仓"
@@ -474,7 +566,8 @@ def test_engine_core_stop_loss_clears_full_core_position():
     assert "止损" in first_sell.reason
 
 
-def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_repaired():
+@pytest.mark.asyncio
+async def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_repaired():
     """核心仓卖出后 3 天观察窗口内，若信号 ETF 仍在关键 EXPMA 下方
     且核心仓仍处保护档位，就继续卖，无需等 10 天冷却。
 
@@ -493,7 +586,7 @@ def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_repair
 
     # NAV: 1.0 → 1.25(peak) → 1.10(drawdown 15%, tier2 命中) → 1.08 → 1.05 → 1.02
     # signal ETF 高位后连续下跌保持在 EXPMA 下方
-    result = engine.run(
+    result = await engine.run(
         config=config,
         fund_nav=_navs([1.0, 1.30, 1.15, 1.10, 1.08, 0.95, 0.95, 0.95]),
         signal_bars=_bars(
@@ -503,18 +596,21 @@ def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_repair
     )
 
     core_sells = [
-        trade for trade in result.trades
+        trade
+        for trade in result.trades
         if trade.action == "sell" and trade.batch_type == "core"
     ]
-    assert len(core_sells) == 2, (
-        f"核心仓应该卖 2 次（第1次 tier2 半仓 Day2，第2次观察期末全部 Day5），实际 {len(core_sells)} 次"
-    )
+    assert (
+        len(core_sells) == 2
+    ), f"核心仓应该卖 2 次（第1次 tier2 半仓 Day2，第2次观察期末全部 Day5），实际 {len(core_sells)} 次"
     # 第一次是 tier2 半仓保护
     assert core_sells[0].shares == pytest.approx(5_000.0)
     assert core_sells[0].event_type == "profit_drawdown"
     # 第二次应该是观察期末的最终卖出（通过 post_sell_observation）
     assert core_sells[1].shares == pytest.approx(5_000.0)
-    assert core_sells[1].event_type == "post_sell_observation", "第二次卖应该由 post_sell_observation 触发（观察期末）"
+    assert (
+        core_sells[1].event_type == "post_sell_observation"
+    ), "第二次卖应该由 post_sell_observation 触发（观察期末）"
 
 
 # ── Task 3: buy path two-layer observation model ──────────────────────────
@@ -550,23 +646,26 @@ def _first_buy_trigger_date(signal_bars, config):
     return buys[0].date
 
 
-def test_buy_trigger_fills_on_T_plus_3_when_observation_confirms():
+@pytest.mark.asyncio
+async def test_buy_trigger_fills_on_T_plus_3_when_observation_confirms():
     fund_nav, signal_bars = _build_breakout_series(confirmed=True)
     config = _config()
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     buys = [t for t in result.trades if t.action == "buy"]
     assert len(buys) == 1
     trigger_date = _first_buy_trigger_date(signal_bars, config)
     assert buys[0].date == trigger_date + timedelta(days=3)
 
 
-def test_buy_not_confirmed_does_not_buy_and_records_gate():
+@pytest.mark.asyncio
+async def test_buy_not_confirmed_does_not_buy_and_records_gate():
     fund_nav, signal_bars = _build_breakout_series(confirmed=False)
     config = _config()
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     assert not [t for t in result.trades if t.action == "buy"]
     gates = [
-        e for e in result.events
+        e
+        for e in result.events
         if e.get("details", {}).get("gate") == "observation_not_confirmed"
     ]
     assert gates, "Expected observation_not_confirmed gate event"
@@ -607,28 +706,32 @@ def _first_sell_trigger_date(signal_bars, config):
     return sells[0].date
 
 
-def test_sell_trigger_fills_on_T_plus_3_after_observation_confirms():
+@pytest.mark.asyncio
+async def test_sell_trigger_fills_on_T_plus_3_after_observation_confirms():
     fund_nav, signal_bars = _build_breakdown_series(confirmed=True)
     config = _config(initial_position_pct=0.2, breakdown_volume_ratio=1.5)
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     sells = [t for t in result.trades if t.action == "sell"]
     assert len(sells) >= 1
     trigger_date = _first_sell_trigger_date(signal_bars, config)
     assert sells[0].date == trigger_date + timedelta(days=3)
 
 
-def test_sell_not_confirmed_does_not_sell():
+@pytest.mark.asyncio
+async def test_sell_not_confirmed_does_not_sell():
     fund_nav, signal_bars = _build_breakdown_series(confirmed=False)
     config = _config(initial_position_pct=0.2, breakdown_volume_ratio=1.5)
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     assert not [t for t in result.trades if t.action == "sell"]
     assert [
-        e for e in result.events
+        e
+        for e in result.events
         if e.get("details", {}).get("gate") == "observation_not_confirmed"
     ]
 
 
-def test_sell_breakdown_event_details_store_volume_ratio_not_raw_volume():
+@pytest.mark.asyncio
+async def test_sell_breakdown_event_details_store_volume_ratio_not_raw_volume():
     """Sell confirmation event details["volume_ratio"] must be the actual
     volume ratio (vol / prior-window avg), not the raw volume value.
     """
@@ -642,10 +745,11 @@ def test_sell_breakdown_event_details_store_volume_ratio_not_raw_volume():
     fund_nav = _navs([1.0] * 6 + [0.85, 0.85, 0.85, 0.85])
     signal_bars = _bars(closes, volumes)
 
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
 
     sell_events = [
-        e for e in result.events
+        e
+        for e in result.events
         if e.get("event_type") == "technical_breakdown"
         and e.get("details", {}).get("judgment", {}).get("confirmed") is True
     ]
@@ -658,7 +762,8 @@ def test_sell_breakdown_event_details_store_volume_ratio_not_raw_volume():
 # ── Task 5: visible gates + incomplete window handling ────────────────────
 
 
-def test_buy_at_full_position_records_target_reached_gate():
+@pytest.mark.asyncio
+async def test_buy_at_full_position_records_target_reached_gate():
     """Buy trigger confirms but position already at target -> hold with gate=target_reached."""
     # initial_position_pct=0.19, fund NAV rises to 1.1 during observation
     # -> position_pct > target -> _decide_buy returns hold with target_reached
@@ -667,15 +772,15 @@ def test_buy_at_full_position_records_target_reached_gate():
     fund_nav = _navs([1.0] * 8 + [1.1, 1.1])
     signal_bars = _bars(closes, volumes)
     config = _config(initial_position_pct=0.19, target_position_pct=0.2)
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     assert not [t for t in result.trades if t.action == "buy"]
     assert any(
-        e.get("details", {}).get("gate") == "target_reached"
-        for e in result.events
+        e.get("details", {}).get("gate") == "target_reached" for e in result.events
     )
 
 
-def test_trigger_near_last_bar_records_incomplete_window():
+@pytest.mark.asyncio
+async def test_trigger_near_last_bar_records_incomplete_window():
     """Buy trigger near end of data -> window incomplete -> hold with gate=incomplete_window."""
     # 8 bars total, trigger at index 6, observation until index 8 (beyond data)
     closes = [10.0] * 6 + [12.0, 12.0]
@@ -683,9 +788,141 @@ def test_trigger_near_last_bar_records_incomplete_window():
     fund_nav = _navs([1.0] * 8)
     signal_bars = _bars(closes, volumes)
     config = _config()
-    result = BacktestEngine().run(config, fund_nav, signal_bars)
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
     assert not [t for t in result.trades if t.action == "buy"]
     assert any(
-        e.get("details", {}).get("gate") == "incomplete_window"
+        e.get("details", {}).get("gate") == "incomplete_window" for e in result.events
+    )
+
+
+# ── Task 3: three-pass engine with LLM judge + cache ──────────────────────
+
+
+class _CountingFakeJudge:
+    """Fake async judge that counts calls and returns a fixed judgment."""
+
+    PROMPT_VERSION = "fake-judge-v1"
+
+    def __init__(self, judgment):
+        self._judgment = judgment
+        self.call_count = 0
+
+    async def judge(self, trigger, window_bars, config, *, all_bars=None):
+        self.call_count += 1
+        return self._judgment
+
+
+@pytest.mark.asyncio
+async def test_three_pass_engine_calls_judge_caches_and_fills_at_T_plus_3(tmp_path):
+    """Pass 2 calls the LLM judge, caches the result; Pass 3 fills at T+3."""
+    from app.backtest.observation.cache import ObservationCache
+    from app.backtest.observation.schemas import ObservationJudgment
+
+    fund_nav, signal_bars = _build_breakout_series(confirmed=True)
+    config = _config()
+    cache = ObservationCache(path=str(tmp_path / "cache.json"))
+    fake_judge = _CountingFakeJudge(
+        ObservationJudgment(
+            decision="buy",
+            confirmed=True,
+            reason="LLM confirmed buy",
+        )
+    )
+
+    result = await BacktestEngine().run(
+        config, fund_nav, signal_bars, judge=fake_judge, cache=cache
+    )
+
+    # Pass 3 used the judgment -> buy trade executed at T+3
+    buys = [t for t in result.trades if t.action == "buy"]
+    assert len(buys) == 1
+    trigger_date = _first_buy_trigger_date(signal_bars, config)
+    assert buys[0].date == trigger_date + timedelta(days=3)
+
+    # Pass 2 called the judge exactly once (one buy trigger)
+    assert fake_judge.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_skips_judge_on_second_run(tmp_path):
+    """A second run with a warm cache must NOT call the judge again."""
+    from app.backtest.observation.cache import ObservationCache
+    from app.backtest.observation.schemas import ObservationJudgment
+
+    fund_nav, signal_bars = _build_breakout_series(confirmed=True)
+    config = _config()
+    cache_path = str(tmp_path / "cache.json")
+    cache = ObservationCache(path=cache_path)
+
+    confirmed_judgment = ObservationJudgment(
+        decision="buy",
+        confirmed=True,
+        reason="LLM confirmed buy",
+    )
+
+    # First run: populates cache
+    judge1 = _CountingFakeJudge(confirmed_judgment)
+    result1 = await BacktestEngine().run(
+        config, fund_nav, signal_bars, judge=judge1, cache=cache
+    )
+    assert judge1.call_count == 1
+    assert len([t for t in result1.trades if t.action == "buy"]) == 1
+
+    # Second run: same cache (warm), new judge instance to verify 0 calls
+    cache2 = ObservationCache(path=cache_path)
+    judge2 = _CountingFakeJudge(confirmed_judgment)
+    result2 = await BacktestEngine().run(
+        config, fund_nav, signal_bars, judge=judge2, cache=cache2
+    )
+
+    # Judge was NOT called (cache hit)
+    assert judge2.call_count == 0
+
+    # Result is identical (reproducible)
+    assert len(result2.trades) == len(result1.trades)
+    buys2 = [t for t in result2.trades if t.action == "buy"]
+    assert len(buys2) == 1
+    assert buys2[0].date == result1.trades[0].date
+
+
+@pytest.mark.asyncio
+async def test_deterministic_judge_default_stays_uncached():
+    """Default DeterministicJudge with cache=None produces same results as before."""
+    fund_nav, signal_bars = _build_breakout_series(confirmed=True)
+    config = _config()
+
+    # No judge or cache passed -> DeterministicJudge, no caching
+    result = await BacktestEngine().run(config, fund_nav, signal_bars)
+    buys = [t for t in result.trades if t.action == "buy"]
+    assert len(buys) == 1
+    trigger_date = _first_buy_trigger_date(signal_bars, config)
+    assert buys[0].date == trigger_date + timedelta(days=3)
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_hold_does_not_buy(tmp_path):
+    """When the LLM judge returns hold (not confirmed), no trade executes."""
+    from app.backtest.observation.cache import ObservationCache
+    from app.backtest.observation.schemas import ObservationJudgment
+
+    fund_nav, signal_bars = _build_breakout_series(confirmed=True)
+    config = _config()
+    cache = ObservationCache(path=str(tmp_path / "cache.json"))
+    fake_judge = _CountingFakeJudge(
+        ObservationJudgment(
+            decision="hold",
+            confirmed=False,
+            reason="LLM says not confirmed",
+            gate="observation_not_confirmed",
+        )
+    )
+
+    result = await BacktestEngine().run(
+        config, fund_nav, signal_bars, judge=fake_judge, cache=cache
+    )
+
+    assert not [t for t in result.trades if t.action == "buy"]
+    assert any(
+        e.get("details", {}).get("gate") == "observation_not_confirmed"
         for e in result.events
     )
