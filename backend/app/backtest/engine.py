@@ -26,6 +26,7 @@ from app.backtest.observation.judge import (
     ObservationJudge,
     OBSERVATION_DAYS,
 )
+from app.backtest.observation.regime import SectorRegime, SectorRegimeProvider
 from app.backtest.observation.schemas import ObservationJudgment
 from app.backtest.report_agent import ReportAgent
 from app.backtest.strategy import RuleBasedStrategyAgent, StrategyDecision
@@ -105,6 +106,7 @@ class BacktestEngine:
         *,
         judge: ObservationJudge | None = None,
         cache: ObservationCache | None = None,
+        regime_provider: SectorRegimeProvider | None = None,
     ) -> BacktestResult:
         if not fund_nav:
             raise ValueError("fund_nav must not be empty")
@@ -112,6 +114,10 @@ class BacktestEngine:
             raise ValueError("fund_nav and signal_bars must have the same length")
         if not 0 <= config.initial_position_pct <= 1:
             raise ValueError("initial_position_pct must be between 0 and 1")
+
+        # Pre-computed sector regimes (sell-side); None when no provider is
+        # given, in which case the old deterministic _get_market_regime is used.
+        self._regimes: dict[int, SectorRegime] | None = None
 
         initial_nav = fund_nav[0].nav
         initial_position_value = config.initial_cash * config.initial_position_pct
@@ -156,6 +162,19 @@ class BacktestEngine:
                 if cache is not None and cache_key is not None:
                     await cache.set(cache_key, j)
             judgments[(tp.kind, tp.index)] = j
+
+        # ── Pass 2b: pre-compute sector regimes (sell-side, cached) ──────
+        # When a regime_provider is given, assess every day's regime here so
+        # Pass 3 stays pure sync.  Cached by (symbol+date+skill version) so
+        # re-runs are zero-skill-call.  When no provider, _regimes stays None
+        # and the old deterministic _get_market_regime is used (buy+sell).
+        if regime_provider is not None:
+            self._regimes = {}
+            for idx in range(len(signal_bars)):
+                self._regimes[idx] = await regime_provider.assess(
+                    config.signal_code, signal_bars, idx, config
+                )
+
         pending: list[tuple[BacktestEvent, StrategyDecision]] = []
         equity_curve: list[PortfolioSnapshot] = []
         trades: list[TradeRecord] = []
@@ -1236,8 +1255,8 @@ class BacktestEngine:
             return []
         for batch in self._batches_by_priority(batches, ["core"]):
             current = self._batch_return_pct(batch, nav_point.nav)
-            # 获取市场制度判断（宏观面 + 技术面）
-            market_regime = self._get_market_regime(index, bars, config)
+            # 获取市场制度判断（sell-side: pre-computed regime or deterministic fallback）
+            market_regime = self._regime_state(index, bars, config)
             tier = self._core_protection_tier(batch, current, market_regime)
             if tier is None:
                 continue
@@ -1408,7 +1427,7 @@ class BacktestEngine:
                 return True, f"{labels}仍命中批次止盈保护条件，继续交给卖出执行", False
             # 核心仓复核：观察期内只观察，不卖；直到最后一天才做最终决策
             is_last_observation_day = observation_day >= observation_days_total
-            market_regime = self._get_market_regime(index, bars, config)
+            market_regime = self._regime_state(index, bars, config)
             core_batches = [
                 batch
                 for batch in self._batches_by_priority(batches, ["core"])
@@ -1478,6 +1497,22 @@ class BacktestEngine:
         return (
             self._core_protection_tier(batch, current_return_pct, "neutral") is not None
         )
+
+    def _regime_state(
+        self, index: int, bars: list[SignalBar], config: BacktestConfig
+    ) -> str:
+        """Look up pre-computed sector regime (sell-side), or fall back.
+
+        When a SectorRegimeProvider was given, ``self._regimes`` holds the
+        per-day assessments pre-computed in Pass 2.  Otherwise (no provider,
+        e.g. existing tests) the old deterministic ``_get_market_regime`` is
+        used so behaviour is unchanged.
+        """
+        if self._regimes is not None:
+            regime = self._regimes.get(index)
+            if regime is not None:
+                return regime.state
+        return self._get_market_regime(index, bars, config)
 
     def _get_market_regime(
         self, index: int, bars: list[SignalBar], config: BacktestConfig
