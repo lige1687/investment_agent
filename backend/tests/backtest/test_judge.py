@@ -37,7 +37,9 @@ def test_buy_confirmed_when_window_holds_above_ma():
     """After a buy trigger, T+1 and T+2 both hold above EXPMA -> confirmed."""
     bars = [_bar(i, 10.0) for i in range(40)] + [_bar(i, 12.0) for i in range(40, 43)]
     trigger = TriggerPoint(kind="buy", index=40, date=bars[40].date)
-    j = DeterministicJudge().judge(trigger, bars[41 : 41 + OBSERVATION_DAYS], _cfg(), all_bars=bars)
+    j = DeterministicJudge().judge(
+        trigger, bars[41 : 41 + OBSERVATION_DAYS], _cfg(), all_bars=bars
+    )
     assert j.confirmed is True
     assert j.decision == "buy"
     assert isinstance(j, ObservationJudgment)

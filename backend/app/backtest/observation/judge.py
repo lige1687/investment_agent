@@ -7,6 +7,7 @@ Phase 0 uses DeterministicJudge (pure function):
 
 Phase 1 will add LLMObserverJudge implementing the same Protocol.
 """
+
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
@@ -25,6 +26,11 @@ class ObservationJudge(Protocol):
 
     Phase 0: DeterministicJudge
     Phase 1: LLMObserverJudge (swaps in, engine zero-change)
+
+    Phase 1a keeps the protocol signature synchronous; LLMObserverJudge.judge
+    is async (Python structural protocols don't enforce signatures).  Task 3
+    makes the protocol and DeterministicJudge async so the engine can await
+    either implementation uniformly.
     """
 
     def judge(
