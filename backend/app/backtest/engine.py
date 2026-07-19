@@ -120,6 +120,9 @@ class BacktestEngine:
         if not 0 <= config.initial_position_pct <= 1:
             raise ValueError("initial_position_pct must be between 0 and 1")
 
+        # Store config so instance methods can access thresholds
+        self.config = config
+
         # Pre-computed sector regimes (sell-side); None when no provider is
         # given, in which case the old deterministic _get_market_regime is used.
         self._regimes: dict[int, SectorRegime] | None = None
@@ -923,9 +926,9 @@ class BacktestEngine:
         if shares <= 0 or config.initial_position_pct <= 0:
             return []
         batch_plan = [
-            ("core", config.target_position_pct * 0.5),
-            ("confirmation", config.target_position_pct * 0.3),
-            ("high_position", config.target_position_pct * 0.2),
+            ("core", config.target_position_pct * config.core_batch_ratio),
+            ("confirmation", config.target_position_pct * config.confirmation_batch_ratio),
+            ("high_position", config.target_position_pct * config.high_position_batch_ratio),
         ]
         remaining_pct = config.initial_position_pct
         batches: list[HoldingBatch] = []
@@ -1157,18 +1160,24 @@ class BacktestEngine:
         drawdown = batch.peak_return_pct - current
         if batch.batch_type == "trial":
             return (
-                batch.peak_return_pct >= 3 and drawdown >= 3
+                batch.peak_return_pct >= self.config.trial_tp_peak_pct
+                and drawdown >= self.config.trial_tp_drawdown_pct
             ) or self._batch_cost_line_protection_triggered(batch, current)
         if batch.batch_type == "high_position":
             return (
-                batch.peak_return_pct >= 5 and drawdown >= 4
+                batch.peak_return_pct >= self.config.high_position_tp_peak_pct
+                and drawdown >= self.config.high_position_tp_drawdown_pct
             ) or self._batch_cost_line_protection_triggered(batch, current)
         if batch.batch_type == "confirmation":
             return (
-                batch.peak_return_pct >= 8 and drawdown >= 5
+                batch.peak_return_pct >= self.config.confirmation_tp_peak_pct
+                and drawdown >= self.config.confirmation_tp_drawdown_pct
             ) or self._batch_cost_line_protection_triggered(batch, current)
         if batch.batch_type == "core":
-            return batch.peak_return_pct >= 15 and drawdown >= 6
+            return (
+                batch.peak_return_pct >= self.config.core_tp_peak_pct
+                and drawdown >= self.config.core_tp_drawdown_pct
+            )
         return False
 
     def _batch_breakdown_sell_allowed(self, batch: HoldingBatch, nav: float) -> bool:
@@ -1357,17 +1366,15 @@ class BacktestEngine:
         #
         # 例外：硬顶保护（_CORE_HARD_CAP_*）——当核心仓从高位回撤过深时，
         # 无论脆弱批次是否还可卖，都必须立即触发核心仓保护，防止高位浮盈被全吃。
-        _CORE_HARD_CAP_PEAK = 40.0  # 峰值浮盈达到此值才启用硬顶
-        _CORE_HARD_CAP_DRAWDOWN = 20.0  # 从峰值回撤超过此值触发硬顶绕过
 
         current_nav = nav_point.nav
 
         # 预先检查核心仓是否已触达硬顶（优先于脆弱批次屏蔽逻辑）
         core_hard_cap_triggered = any(
             batch.batch_type == "core"
-            and batch.peak_return_pct >= _CORE_HARD_CAP_PEAK
+            and batch.peak_return_pct >= self.config.core_hard_cap_peak_pct
             and (batch.peak_return_pct - self._batch_return_pct(batch, current_nav))
-            >= _CORE_HARD_CAP_DRAWDOWN
+            >= self.config.core_hard_cap_drawdown_pct
             for batch in batches
         )
 
@@ -1600,18 +1607,21 @@ class BacktestEngine:
     def _batch_cost_line_protection_triggered(
         self, batch: HoldingBatch, current_return_pct: float
     ) -> bool:
-        near_cost_line_pct = 1.5
+        near_cost_line_pct = self.config.near_cost_line_pct
         if batch.batch_type == "trial":
             return (
-                batch.peak_return_pct >= 3 and current_return_pct <= near_cost_line_pct
+                batch.peak_return_pct >= self.config.trial_tp_peak_pct
+                and current_return_pct <= near_cost_line_pct
             )
         if batch.batch_type == "high_position":
             return (
-                batch.peak_return_pct >= 5 and current_return_pct <= near_cost_line_pct
+                batch.peak_return_pct >= self.config.high_position_tp_peak_pct
+                and current_return_pct <= near_cost_line_pct
             )
         if batch.batch_type == "confirmation":
             return (
-                batch.peak_return_pct >= 5 and current_return_pct <= near_cost_line_pct
+                batch.peak_return_pct >= self.config.confirmation_tp_peak_pct
+                and current_return_pct <= near_cost_line_pct
             )
         return False
 
@@ -1745,8 +1755,7 @@ class BacktestEngine:
 
         # 档位 4：动态止盈保护（基于市场制度调整，最低优先级）
         peak = batch.peak_return_pct
-        retention_rates = {"bull": 0.85, "neutral": 0.75, "bear": 0.50}
-        retention_rate = retention_rates.get(market_regime, 0.75)
+        retention_rate = self.config.regime_retention_rates.get(market_regime, 0.75)
         profit_threshold = peak * retention_rate
 
         # 当硬编码阈值都未触发时，使用相对比例判断
