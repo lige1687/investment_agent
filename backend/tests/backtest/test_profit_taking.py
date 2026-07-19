@@ -294,3 +294,160 @@ async def test_no_sell_trigger_no_observation_profit_takes():
         e for e in result.events if e["event_type"] == "technical_breakdown"
     ]
     assert len(breakdown_events) == 0
+
+
+# ── Task 6: bull trailing + bear gain-ladder ───────────────────────────────
+#
+# Tests use profit_drawdown_trigger_pct=100 to disable the EventDetector's
+# account-level profit_drawdown, isolating the regime-conditional layer.
+
+
+@pytest.mark.asyncio
+async def test_bull_trailing_sells_on_drawdown():
+    """Bull + batch peak 15% draws down to 5% (10% drawdown) -> trailing sells."""
+    config = _config(
+        initial_position_pct=0.2,
+        target_position_pct=0.2,
+        profit_drawdown_trigger_pct=100.0,  # disable EventDetector profit_drawdown
+        trailing_drawdown_pct=10.0,
+    )
+    engine = BacktestEngine()
+    regime_provider = FakeRegimeProvider(state="bull", tightness="loose")
+
+    result = await engine.run(
+        config=config,
+        fund_nav=_navs([1.0, 1.15, 1.05, 1.05]),
+        signal_bars=_bars(
+            closes=[10, 10.1, 10.2, 10.2],
+            volumes=[100, 100, 100, 100],
+        ),
+        regime_provider=regime_provider,
+    )
+
+    sell_trades = [t for t in result.trades if t.action == "sell"]
+    assert len(sell_trades) >= 1, "trailing should sell in bull regime"
+    # The sell should be from profit_drawdown (trailing)
+    assert all(t.event_type == "profit_drawdown" for t in sell_trades)
+    # Verify a trailing event was emitted
+    trailing_events = [
+        e
+        for e in result.events
+        if e["event_type"] == "profit_drawdown"
+        and e["details"].get("batch_protection") == "trailing"
+    ]
+    assert len(trailing_events) >= 1
+
+
+@pytest.mark.asyncio
+async def test_bear_gain_ladder_sells_at_rungs():
+    """Bear +20% -> gain-ladder sells one tier, +30% -> another, between no sell."""
+    config = _config(
+        initial_position_pct=0.2,
+        target_position_pct=0.2,
+        profit_drawdown_trigger_pct=100.0,
+        gain_ladder_thresholds=(20.0, 30.0),
+    )
+    engine = BacktestEngine()
+    regime_provider = FakeRegimeProvider(state="bear", tightness="tight")
+
+    result = await engine.run(
+        config=config,
+        fund_nav=_navs([1.0, 1.20, 1.25, 1.30, 1.30]),
+        signal_bars=_bars(
+            closes=[10, 10.1, 10.2, 10.3, 10.3],
+            volumes=[100, 100, 100, 100, 100],
+        ),
+        regime_provider=regime_provider,
+    )
+
+    sell_trades = [t for t in result.trades if t.action == "sell"]
+    assert len(sell_trades) == 2, f"expected 2 gain-ladder sells, got {len(sell_trades)}"
+
+    # First sell at +20% rung (executes day after trigger)
+    assert sell_trades[0].date == date(2026, 1, 3)  # index 2
+    assert sell_trades[0].batch_type == "high_position"
+
+    # Second sell at +30% rung (executes day after trigger)
+    assert sell_trades[1].date == date(2026, 1, 5)  # index 4
+    assert sell_trades[1].batch_type == "confirmation"
+
+    # No sell between rungs (index 3 = 2026-01-04)
+    sell_dates = {t.date for t in sell_trades}
+    assert date(2026, 1, 4) not in sell_dates, "no sell between rungs"
+
+    # Verify gain_ladder events
+    gl_events = [
+        e
+        for e in result.events
+        if e["event_type"] == "profit_drawdown"
+        and e["details"].get("batch_protection") == "gain_ladder"
+    ]
+    assert len(gl_events) == 2
+
+
+@pytest.mark.asyncio
+async def test_bull_does_not_gain_ladder():
+    """Bull regime: batch return hits +20% but gain-ladder must NOT fire."""
+    config = _config(
+        initial_position_pct=0.2,
+        target_position_pct=0.2,
+        profit_drawdown_trigger_pct=100.0,
+        gain_ladder_thresholds=(20.0, 30.0),
+        trailing_drawdown_pct=50.0,  # high threshold so trailing doesn't fire either
+    )
+    engine = BacktestEngine()
+    regime_provider = FakeRegimeProvider(state="bull", tightness="loose")
+
+    result = await engine.run(
+        config=config,
+        fund_nav=_navs([1.0, 1.20, 1.20]),
+        signal_bars=_bars(
+            closes=[10, 10.1, 10.2],
+            volumes=[100, 100, 100],
+        ),
+        regime_provider=regime_provider,
+    )
+
+    sell_trades = [t for t in result.trades if t.action == "sell"]
+    assert len(sell_trades) == 0, "bull must not gain-ladder or trailing (no drawdown)"
+
+    gl_events = [
+        e
+        for e in result.events
+        if e["details"].get("batch_protection") == "gain_ladder"
+    ]
+    assert len(gl_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_bear_does_not_trailing():
+    """Bear regime: batch drawdown hits threshold but trailing must NOT fire."""
+    config = _config(
+        initial_position_pct=0.2,
+        target_position_pct=0.2,
+        profit_drawdown_trigger_pct=100.0,
+        trailing_drawdown_pct=10.0,
+        gain_ladder_thresholds=(50.0, 60.0),  # high rungs so gain-ladder doesn't fire
+    )
+    engine = BacktestEngine()
+    regime_provider = FakeRegimeProvider(state="bear", tightness="tight")
+
+    result = await engine.run(
+        config=config,
+        fund_nav=_navs([1.0, 1.15, 1.05, 1.05]),
+        signal_bars=_bars(
+            closes=[10, 10.1, 10.2, 10.2],
+            volumes=[100, 100, 100, 100],
+        ),
+        regime_provider=regime_provider,
+    )
+
+    sell_trades = [t for t in result.trades if t.action == "sell"]
+    assert len(sell_trades) == 0, "bear must not trailing"
+
+    trailing_events = [
+        e
+        for e in result.events
+        if e["details"].get("batch_protection") == "trailing"
+    ]
+    assert len(trailing_events) == 0

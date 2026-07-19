@@ -28,7 +28,11 @@ from app.backtest.observation.judge import (
 )
 from app.backtest.observation.regime import SectorRegime, SectorRegimeProvider
 from app.backtest.observation.schemas import ObservationJudgment
-from app.backtest.profit_taking import should_suppress_profit_taking
+from app.backtest.profit_taking import (
+    GainLadderTakeProfit,
+    TrailingTakeProfit,
+    should_suppress_profit_taking,
+)
 from app.backtest.report_agent import ReportAgent
 from app.backtest.strategy import RuleBasedStrategyAgent, StrategyDecision
 from app.backtest.trigger_engine import TriggerEngine, TriggerSignal
@@ -138,6 +142,10 @@ class BacktestEngine:
         if judge is None:
             judge = DeterministicJudge()
 
+        # Regime-conditional profit-taking strategies (Task 6)
+        trailing_tp = TrailingTakeProfit()
+        gain_ladder_tp = GainLadderTakeProfit()
+
         # ── Pass 1: scan triggers (deterministic) ──────────────────────
         all_triggers = scanner.scan(signal_bars)
         buy_trigger_map = {t.index: t for t in all_triggers if t.kind == "buy"}
@@ -208,12 +216,16 @@ class BacktestEngine:
             )
             if executed_sell_events:
                 source_event = executed_sell_events[-1]
-                post_sell_source_event_type = str(
-                    source_event.details.get("continuation_source_event_type")
-                    or source_event.event_type
-                )
-                post_sell_observation_start_index = index + 1
-                post_sell_observation_until_index = index + 3
+                # Post-sell observation window only activates for risk-exit (technical_breakdown),
+                # not for regime-driven profit-taking (gain_ladder/trailing). Otherwise the
+                # post-sell suppression prevents the next gain-ladder rung from firing.
+                if source_event.event_type == "technical_breakdown":
+                    post_sell_source_event_type = str(
+                        source_event.details.get("continuation_source_event_type")
+                        or source_event.event_type
+                    )
+                    post_sell_observation_start_index = index + 1
+                    post_sell_observation_until_index = index + 3
             shares = self._total_shares(batches)
             pending = []
 
@@ -268,6 +280,23 @@ class BacktestEngine:
                     nav_point, snapshot, batches, index, signal_bars, config
                 )
             )
+            # Regime-conditional profit-taking: trailing (bull) / gain-ladder (bear)
+            # Only when not suppressed and a regime provider is active.
+            if not _suppress_profit and self._regimes is not None:
+                _regime = self._regimes.get(index)
+                if _regime is not None:
+                    _tp_event = trailing_tp.detect(
+                        batches, nav_point.nav, config, _regime,
+                        snapshot, nav_point.date, self,
+                    )
+                    if _tp_event is not None:
+                        batch_events.append(_tp_event)
+                    _tp_event = gain_ladder_tp.detect(
+                        batches, nav_point.nav, config, _regime,
+                        snapshot, nav_point.date, self,
+                    )
+                    if _tp_event is not None:
+                        batch_events.append(_tp_event)
             post_sell_events = self._detect_post_sell_observation(
                 index=index,
                 nav_point=nav_point,
@@ -559,6 +588,8 @@ class BacktestEngine:
                     event.event_type in {"profit_drawdown", "technical_breakdown"}
                     and index <= sell_cooldown_until_index
                     and not is_core_protection
+                    and event.details.get("batch_protection")
+                    not in ("trailing", "gain_ladder")
                 ):
                     if test_mode:
                         decision = StrategyDecision(
@@ -607,12 +638,17 @@ class BacktestEngine:
                         # 避免反复折半。同时不激活常规 sell_cooldown，让常规 profit_drawdown
                         # 在观察期结束后能正常触发最后一次卖出。
                         core_sell_cooldown_until_index = index + decision.observe_days
-                    else:
+                    elif event.details.get("batch_protection") not in (
+                        "trailing",
+                        "gain_ladder",
+                    ):
                         # 修复卖出冷却期逻辑：
                         # 不再使用固定的 sell_cooldown_days（10天太长）
                         # 改为只使用 observe_days（通常 3 天）
                         # 在观察期内通过 post_sell_observation 检查是否修复
                         # 修复了就不再卖，没修复就继续卖（观察期结束后）
+                        # trailing/gain_ladder 豁免冷却：前者靠批次移除去重，
+                        # 后者靠 _sold_rungs 去重，不需要冷却期阻止下一档止盈。
                         sell_cooldown_until_index = index + decision.observe_days
             if test_mode and not emitted_event:
                 triggers = audit_trigger_engine.evaluate(
@@ -965,6 +1001,20 @@ class BacktestEngine:
             return selected
         if event.event_type == "profit_drawdown":
             target_batch_type = event.details.get("target_batch_type")
+            batch_protection = event.details.get("batch_protection")
+            # Regime-conditional profit-taking (trailing/gain_ladder):
+            # detection already verified the condition, so skip the
+            # _batch_take_profit_allowed check and sell the target batch.
+            if batch_protection in ("trailing", "gain_ladder"):
+                if isinstance(target_batch_type, str):
+                    selected = [
+                        batch
+                        for batch in self._batches_by_priority(
+                            batches, [target_batch_type]
+                        )
+                    ]
+                    return selected[:1]
+                return []
             if isinstance(target_batch_type, str):
                 selected = [
                     batch
@@ -1193,6 +1243,60 @@ class BacktestEngine:
             "trial": "试错仓",
         }
         return labels.get(batch_type, batch_type)
+
+    def make_profit_drawdown_event(
+        self,
+        *,
+        batch: HoldingBatch,
+        nav: float,
+        event_date: date,
+        snapshot: PortfolioSnapshot,
+        batch_protection: str,
+        reason: str,
+        extra_details: dict | None = None,
+    ) -> BacktestEvent:
+        """Create a profit_drawdown event for regime-conditional profit-taking.
+
+        Implements the ``_EventFactory`` protocol used by
+        ``TrailingTakeProfit`` / ``GainLadderTakeProfit``.
+        """
+        current = self._batch_return_pct(batch, nav)
+        drawdown = batch.peak_return_pct - current
+        details = {
+            "batch_protection": batch_protection,
+            "target_batch_type": batch.batch_type,
+            "batch_cost_nav": batch.cost_nav,
+            "batch_current_nav": nav,
+            "batch_current_return_pct": current,
+            "batch_peak_return_pct": batch.peak_return_pct,
+            "batch_drawdown_from_peak_pct": drawdown,
+            "trigger_signals": [
+                {
+                    "priority": "P1",
+                    "trigger_family": "take_profit",
+                    "trigger_type": f"batch_{batch_protection}",
+                    "reason": reason,
+                    "should_call_ai": False,
+                    "metrics": {
+                        "batch_type": batch.batch_type,
+                        "cost_nav": batch.cost_nav,
+                        "current_nav": nav,
+                        "current_return_pct": current,
+                        "peak_return_pct": batch.peak_return_pct,
+                        "drawdown_from_peak_pct": drawdown,
+                    },
+                }
+            ],
+        }
+        if extra_details:
+            details.update(extra_details)
+        return BacktestEvent(
+            event_type="profit_drawdown",
+            date=event_date,
+            reason=reason,
+            details=details,
+            snapshot=snapshot,
+        )
 
     def _detect_batch_profit_protection(
         self,

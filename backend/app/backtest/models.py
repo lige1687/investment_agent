@@ -79,6 +79,13 @@ class BacktestConfig:
     current_correlated_growth_exposure_pct: float = 0.0
     account_drawdown_redline_pct: float = 10.0
     prosperity: ProsperityConfig = field(default_factory=ProsperityConfig)
+    # Regime-conditional profit-taking (Task 6, spec §11.2)
+    # Bull: trailing drawdown threshold (% from batch peak).  Looser than
+    # existing batch take-profit thresholds so profits run further in bull.
+    trailing_drawdown_pct: float = 10.0
+    # Bear: gain-ladder rungs (% batch return).  At each rung, sell one batch
+    # tier.  Do NOT wait for drawdown -- take profit directly in bear.
+    gain_ladder_thresholds: tuple[float, ...] = (20.0, 30.0)
 
 
 @dataclass(frozen=True)
