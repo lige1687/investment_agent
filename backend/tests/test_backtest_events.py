@@ -245,7 +245,8 @@ def test_strategy_buys_half_plan_for_middle_or_strong_buy_candidate():
         date=date(2026, 1, 7),  # 观察期后的确认日期
         reason="买入候选经过2天观察确认持续满足条件",
         details={
-            "original_buy_signal": {"signal_level": "middle_buy"}
+            "original_buy_signal": {"signal_level": "middle_buy"},
+            "market_regime": "bull"  # Bull regime: middle_buy -> 70% allocation
         },
         snapshot=PortfolioSnapshot(
             date=date(2026, 1, 7),
@@ -262,7 +263,7 @@ def test_strategy_buys_half_plan_for_middle_or_strong_buy_candidate():
     decision = RuleBasedStrategyAgent(_config()).decide(event)
 
     assert decision.action == "buy"
-    # middle_buy (4/5) 信号现在建仓 70% 目标仓位 = 0.2 * 0.7 = 0.14
+    # middle_buy (4/5) in bull regime -> 70% allocation = 0.2 * 0.7 = 0.14
     assert decision.target_position_delta_pct == pytest.approx(0.14)
 
 

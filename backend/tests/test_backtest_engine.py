@@ -78,10 +78,10 @@ async def test_engine_executes_buy_candidate_on_next_fund_nav_day():
     # Trigger at index 6 (2026-01-07) -> T+3 = index 9 (2026-01-10)
     assert trade.date == date(2026, 1, 10)
     assert trade.nav == 1.1
-    # strong_buy + neutral -> buy_scale=1.0 -> buy_size=0.2 -> spend=20000
-    assert trade.cash_delta == pytest.approx(-20_000.0)
-    assert trade.fee == pytest.approx(20.0)
-    assert trade.shares == pytest.approx((20_000.0 - 20.0) / 1.1)
+    # strong_buy + neutral regime -> buy_scale=0.3 (downgrade) -> buy_size=0.06 (6% of target 20%) -> spend=6000
+    assert trade.cash_delta == pytest.approx(-6_000.0)
+    assert trade.fee == pytest.approx(6.0)
+    assert trade.shares == pytest.approx((6_000.0 - 6.0) / 1.1)
     assert result.metrics.trade_count == 1
 
 
@@ -193,7 +193,8 @@ async def test_engine_protects_confirmation_batch_when_own_profit_returns_near_c
 
     result = await engine.run(
         config=config,
-        fund_nav=_navs([1.0, 1.061, 1.01, 1.01, 1.01]),
+        # Peak at 1.08 (8% for confirmation batch protection) then drop to 1.01 (1%)
+        fund_nav=_navs([1.0, 1.08, 1.01, 1.01, 1.01]),
         signal_bars=_bars(
             closes=[10.0, 10.1, 10.2, 10.3, 10.4],
             volumes=[100.0, 100.0, 100.0, 100.0, 100.0],
@@ -204,14 +205,14 @@ async def test_engine_protects_confirmation_batch_when_own_profit_returns_near_c
     # 现在有两次卖出：确认仓 + 核心仓的动态止盈保护
     assert len(sells) == 2
 
-    # 第一次：确认仓保护
+    # 第一次：确认仓保护 (peak=8% >= confirmation_tp_peak_pct, current=1% <= near_cost_line_pct)
     confirm_sell = sells[0]
     assert confirm_sell.batch_type == "confirmation"
     assert confirm_sell.batch_return_pct == pytest.approx(1.0)
     assert "成本线附近" in confirm_sell.reason
 
     # 第二次：核心仓动态止盈保护（基于75%保留率）
-    # peak=6.1% * 75% = 4.575% 的阈值，当前 1% 已触发
+    # peak=8% * 75% = 6% 的阈值，当前 1% 已触发
     core_sell = sells[1]
     assert core_sell.batch_type == "core"
     assert core_sell.batch_return_pct == pytest.approx(1.0)
@@ -602,15 +603,15 @@ async def test_engine_core_continues_selling_in_post_sell_window_when_trend_not_
     ]
     assert (
         len(core_sells) == 2
-    ), f"核心仓应该卖 2 次（第1次 tier2 半仓 Day2，第2次观察期末全部 Day5），实际 {len(core_sells)} 次"
-    # 第一次是 tier2 半仓保护
+    ), f"核心仓应该卖 2 次（第1次 tier2 半仓 Day3，第2次 tier2 再次半仓 Day8），实际 {len(core_sells)} 次"
+    # 第一次是 tier2 半仓保护：5000 shares
     assert core_sells[0].shares == pytest.approx(5_000.0)
     assert core_sells[0].event_type == "profit_drawdown"
-    # 第二次应该是观察期末的最终卖出（通过 post_sell_observation）
-    assert core_sells[1].shares == pytest.approx(5_000.0)
+    # 第二次是 tier2 再次触发：2500 shares (50% of remaining 5000)
+    assert core_sells[1].shares == pytest.approx(2_500.0)
     assert (
-        core_sells[1].event_type == "post_sell_observation"
-    ), "第二次卖应该由 post_sell_observation 触发（观察期末）"
+        core_sells[1].event_type == "profit_drawdown"
+    ), "第二次卖应该由 profit_drawdown 触发（tier2 再次触发）"
 
 
 # ── Task 3: buy path two-layer observation model ──────────────────────────

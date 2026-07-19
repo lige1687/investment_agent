@@ -353,9 +353,9 @@ class BacktestEngine:
                             if regime_obj is not None:
                                 regime_for_buy = regime_obj.state
 
-                        # Check prosperity gate: prosperity < 50 → reject buy regardless of regime
+                        # Check prosperity gate: score below min_score_to_buy → reject buy regardless of regime
                         prosperity = config.prosperity.score
-                        if prosperity < 50:
+                        if prosperity < config.prosperity.min_score_to_buy:
                             regime_for_buy = "rejected"
 
                         buy_confirmation_event = BacktestEvent(
