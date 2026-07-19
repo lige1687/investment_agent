@@ -346,6 +346,18 @@ class BacktestEngine:
                         ),
                     )
                     if judgment.confirmed and judgment.decision == "buy":
+                        # Task 8: Use real regime from provider (or fallback to deterministic)
+                        regime_for_buy = "neutral"
+                        if self._regimes is not None:
+                            regime_obj = self._regimes.get(index)
+                            if regime_obj is not None:
+                                regime_for_buy = regime_obj.state
+
+                        # Check prosperity gate: prosperity < 50 → reject buy regardless of regime
+                        prosperity = config.prosperity.score
+                        if prosperity < 50:
+                            regime_for_buy = "rejected"
+
                         buy_confirmation_event = BacktestEvent(
                             event_type="buy_confirmation",
                             date=signal_bars[index].date,
@@ -358,7 +370,7 @@ class BacktestEngine:
                                     "index": trigger.index,
                                     "date": trigger.date.isoformat(),
                                 },
-                                "market_regime": "neutral",
+                                "market_regime": regime_for_buy,
                                 "judgment": {
                                     "confirmed": judgment.confirmed,
                                     "gate": judgment.gate,
