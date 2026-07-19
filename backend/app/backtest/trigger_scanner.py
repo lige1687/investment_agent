@@ -5,14 +5,14 @@ Scans OHLCV bars for volume-confirmed EXPMA crossovers:
 - sell trigger: previous close >= EXPMA, current close < EXPMA, volume_ratio >= breakdown_volume_ratio
 
 This is a pure deterministic module -- no LLM, no side effects.
-Phase 1 will swap the volume thresholds for a skill-provided provider; the
+Phase 1 allows volume thresholds to be provided by VolumeThresholdProvider; the
 crossover logic stays the same.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from app.backtest.indicators import expma, volume_ratio
 from app.backtest.models import BacktestConfig, SignalBar
@@ -30,12 +30,79 @@ class TriggerPoint:
 
 
 class TriggerScanner:
-    """Scans bars for volume-confirmed EXPMA crossover triggers (L1)."""
+    """Scans bars for volume-confirmed EXPMA crossover triggers (L1).
 
-    def __init__(self, config: BacktestConfig):
+    Optionally uses VolumeThresholdProvider for dynamic volume thresholds.
+    If no provider given, uses config defaults.
+    """
+
+    def __init__(
+        self,
+        config: BacktestConfig,
+        volume_provider: Any | None = None,
+    ):
+        """
+        Parameters
+        ----------
+        config : BacktestConfig
+            Backtest configuration with default volume ratios.
+        volume_provider : optional
+            VolumeThresholdProvider instance for dynamic volume thresholds.
+            If None, uses config.buy_volume_ratio and config.breakdown_volume_ratio.
+        """
         self.config = config
+        self.volume_provider = volume_provider
+
+    async def scan_async(
+        self,
+        bars: list[SignalBar],
+        symbol: str = "",
+        config: BacktestConfig | None = None,
+    ) -> list[TriggerPoint]:
+        """Async scan with volume provider support.
+
+        For use when VolumeThresholdProvider is available. Computes thresholds
+        once at the start, then scans deterministically.
+        """
+        config = config or self.config
+
+        # Determine volume thresholds (once per scan)
+        if self.volume_provider is not None and bars:
+            try:
+                buy_threshold = await self.volume_provider.get_threshold(
+                    symbol, "buy", bars[0].date, config
+                )
+                sell_threshold = await self.volume_provider.get_threshold(
+                    symbol, "sell", bars[0].date, config
+                )
+            except Exception as exc:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning("Failed to get volume thresholds, using config defaults: %s", exc)
+                buy_threshold = config.buy_volume_ratio
+                sell_threshold = config.breakdown_volume_ratio
+        else:
+            buy_threshold = config.buy_volume_ratio
+            sell_threshold = config.breakdown_volume_ratio
+
+        return self._scan_deterministic(bars, buy_threshold, sell_threshold)
 
     def scan(self, bars: list[SignalBar]) -> list[TriggerPoint]:
+        """Synchronous scan with config defaults (backward compat)."""
+        return self._scan_deterministic(
+            bars,
+            self.config.buy_volume_ratio,
+            self.config.breakdown_volume_ratio,
+        )
+
+    def _scan_deterministic(
+        self,
+        bars: list[SignalBar],
+        buy_threshold: float,
+        sell_threshold: float,
+    ) -> list[TriggerPoint]:
+        """Deterministic scan given fixed thresholds."""
         if len(bars) < 2:
             return []
 
@@ -60,7 +127,7 @@ class TriggerScanner:
             if (
                 prev_close <= prev_expma
                 and curr_close > curr_expma
-                and vr >= self.config.buy_volume_ratio
+                and vr >= buy_threshold
             ):
                 triggers.append(TriggerPoint(kind="buy", index=i, date=bars[i].date))
 
@@ -68,7 +135,7 @@ class TriggerScanner:
             if (
                 prev_close >= prev_expma
                 and curr_close < curr_expma
-                and vr >= self.config.breakdown_volume_ratio
+                and vr >= sell_threshold
             ):
                 triggers.append(TriggerPoint(kind="sell", index=i, date=bars[i].date))
 
