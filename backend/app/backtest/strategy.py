@@ -17,6 +17,7 @@ class StrategyDecision:
     target_position_delta_pct: float = 0.0
     ratio_of_position: float = 0.0
     observe_days: int = 0
+    gate: str | None = None  # visible gate for hold/observe decisions
 
 
 class RuleBasedStrategyAgent:
@@ -32,7 +33,9 @@ class RuleBasedStrategyAgent:
                 reason="账户级风控触发，禁止买入/禁止加仓，先保账户风险",
             )
         if event.event_type == "buy_candidate":
-            # 在进入观察期前，先检查一些关键风控
+            # buy_candidate 现在由 TriggerScanner 触发、引擎直接管理观察期，
+            # strategy.decide() 不再在非 test 模式下被调用。
+            # 保留 account_risk / dust 检查供 test 模式记录。
             trigger_signals = event.details.get("trigger_signals", [])
             if any(
                 trigger.get("priority") == "P0" and trigger.get("trigger_family") == "account_risk"
@@ -60,31 +63,12 @@ class RuleBasedStrategyAgent:
                     reason="剩余可买空间低于最小交易仓位，忽略零头补仓",
                 )
 
-            # 分级观察期：根据信号强度决定观察期长度
-            buy_signal = event.details.get("buy_signal", {})
-            signal_level = buy_signal.get("signal_level")
-
-            if signal_level == "strong_buy":
-                # 强买信号（5/5维度）：立即执行，无需观察
-                return StrategyDecision(
-                    action="observe",
-                    reason="强买信号闭环（5/5维度），立即进入确认流程，无需等待",
-                    observe_days=0,
-                )
-            elif signal_level == "middle_buy":
-                # 中等买信号（4/5维度）：观察1天确认
-                return StrategyDecision(
-                    action="observe",
-                    reason="中等买信号已基本确认（4/5维度），观察1天确认持续性",
-                    observe_days=1,
-                )
-            else:  # weak_buy
-                # 弱买信号（3/5维度）：观察2天确认
-                return StrategyDecision(
-                    action="observe",
-                    reason="弱买信号需要确认（3/5维度），观察2天确认条件持续满足",
-                    observe_days=2,
-                )
+            # 统一观察期：不再按 5 维 signal_level 分级（已删除死规则）
+            return StrategyDecision(
+                action="observe",
+                reason="放量突破站上EXPMA，进入观察期确认站稳",
+                observe_days=2,
+            )
         if event.event_type == "buy_confirmation":
             return self._decide_buy(event)
         if event.event_type == "risk_block":
@@ -150,7 +134,18 @@ class RuleBasedStrategyAgent:
                 action="observe",
                 observe_days=self.config.observe_days,
                 reason="P0账户风控触发，禁止买入/禁止加仓，先重新评估账户风险",
+                gate="account_risk",
             )
+
+        # Task 8: Check prosperity rejection
+        market_regime = event.details.get("market_regime", "neutral")
+        if market_regime == "rejected":
+            return StrategyDecision(
+                action="hold",
+                reason="经济景气度低于50，拒绝买入",
+                gate="prosperity_rejected",
+            )
+
         snapshot = event.snapshot
         current_position_pct = snapshot.position_pct if snapshot else 0.0
         effective_target = min(
@@ -160,48 +155,46 @@ class RuleBasedStrategyAgent:
         )
         remaining_target = max(effective_target - current_position_pct, 0.0)
         if remaining_target <= 0:
-            return StrategyDecision(action="hold", reason="当前仓位已达到目标仓位，不再加仓")
+            return StrategyDecision(
+                action="hold", reason="当前仓位已达到目标仓位，不再加仓", gate="target_reached"
+            )
         if remaining_target < self.config.min_trade_position_pct:
-            return StrategyDecision(action="hold", reason="剩余可买空间低于最小交易仓位，忽略零头补仓")
+            return StrategyDecision(
+                action="hold",
+                reason="剩余可买空间低于最小交易仓位，忽略零头补仓",
+                gate="min_trade_floor",
+            )
 
         # 对于 buy_confirmation 事件，使用原始的买入信号
         buy_signal = event.details.get("original_buy_signal", {})
         signal_level = buy_signal.get("signal_level")
 
-        # batch-trading-market-regime 结果透传至此（batch-trading-batch-planner）
-        market_regime = event.details.get("market_regime", "neutral")
-
-        # 分级建仓规模：信号强度 × 市场环境双重调节
-        #
-        # 设计逻辑（对应 batch-trading-batch-planner skill）：
-        #   strong_buy：bull=100%，neutral=100%，bear=70%（降档保护）
-        #   middle_buy：bull=70%，neutral=70%，bear=40%（降档保护）
-        #   weak_buy：  bull=50%，neutral=30%（已在 bear 市被阻断，不会到这里）
-        if signal_level == "strong_buy":
-            if market_regime == "bear":
-                buy_scale = 0.7
-                scale_reason = "强买信号（5/5维度）但market_regime=bear，降档至70%目标仓位"
-            else:
+        # Task 8: Regime-based tier downgrading
+        # In bear/neutral regime, downgrade to confirmation batch only (6%)
+        # In bull regime, use full tier allocation
+        if market_regime in ("bear", "neutral"):
+            # Downgrade: target 20% → confirmation batch 6% only
+            buy_scale = 0.3  # 6% / 20% = 0.3 of effective_target
+            scale_reason = f"市场制度={market_regime}，降档至确认仓(6%)，不买核心仓(10%)"
+        else:
+            # Bull regime: use normal sizing
+            if signal_level == "strong_buy":
                 buy_scale = 1.0
-                scale_reason = f"强买信号（5/5维度），market_regime={market_regime}，建满100%目标仓位"
-        elif signal_level == "middle_buy":
-            if market_regime == "bear":
-                buy_scale = 0.4
-                scale_reason = "中等买信号（4/5维度）但market_regime=bear，降档至40%目标仓位"
-            else:
+                scale_reason = f"强买信号且market_regime={market_regime}，建满100%目标仓位"
+            elif signal_level == "middle_buy":
                 buy_scale = 0.7
-                scale_reason = f"中等买信号（4/5维度），market_regime={market_regime}，建仓70%目标仓位"
-        else:  # weak_buy（此时 market_regime 必然为 neutral 或 bull）
-            if market_regime == "bull":
+                scale_reason = f"中等买信号，market_regime={market_regime}，建仓70%目标仓位"
+            else:  # weak_buy
                 buy_scale = 0.5
-                scale_reason = "弱买信号（3/5维度）且market_regime=bull，建仓50%目标仓位"
-            else:
-                buy_scale = 0.3
-                scale_reason = "弱买信号（3/5维度），market_regime=neutral，谨慎建仓30%目标仓位"
+                scale_reason = f"弱买信号，market_regime={market_regime}，建仓50%目标仓位"
 
         buy_size = min(effective_target * buy_scale, remaining_target)
         if buy_size < self.config.min_trade_position_pct:
-            return StrategyDecision(action="hold", reason="本次买入低于最小交易仓位，忽略零头补仓")
+            return StrategyDecision(
+                action="hold",
+                reason="本次买入低于最小交易仓位，忽略零头补仓",
+                gate="min_trade_floor",
+            )
 
         reason = f"{scale_reason}，保留后续确认仓位"
 

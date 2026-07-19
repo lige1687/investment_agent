@@ -1,4 +1,5 @@
 """Fund backtest REST API endpoints."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, replace
@@ -8,8 +9,17 @@ from fastapi import APIRouter, HTTPException
 from app.backtest.engine import BacktestEngine
 from app.backtest.fees import FundFeeModel, RedemptionFeeTier
 from app.backtest.fund_nav_data import EastmoneyFundNavClient
-from app.backtest.models import BacktestConfig, FundNavPoint, ProsperityConfig, SignalBar
-from app.backtest.presets import BacktestPreset, get_backtest_preset, list_backtest_presets
+from app.backtest.models import (
+    BacktestConfig,
+    FundNavPoint,
+    ProsperityConfig,
+    SignalBar,
+)
+from app.backtest.presets import (
+    BacktestPreset,
+    get_backtest_preset,
+    list_backtest_presets,
+)
 from app.backtest.strategy_compiler_agent import compile_and_apply_strategy_text
 from app.backtest.westock_data import WestockDataClient
 from app.schemas.backtest import (
@@ -56,7 +66,9 @@ async def run_backtest(payload: BacktestRunRequest) -> BacktestRunResponse:
     else:
         fund_nav = await _load_fund_nav(payload)
         signal_bars = await _load_signal_bars(payload)
-    return _run_engine_response(config, fee_model, fund_nav, signal_bars, strategy_profile, payload.test_mode)
+    return await _run_engine_response(
+        config, fee_model, fund_nav, signal_bars, strategy_profile, payload.test_mode
+    )
 
 
 @router.get("/presets", response_model=BacktestPresetsResponse)
@@ -142,10 +154,12 @@ async def run_backtest_preset(payload: BacktestRunPresetRequest) -> BacktestRunR
                 status_code=502,
                 detail=f"westock-data fetch failed: {exc}",
             ) from exc
-    return _run_engine_response(config, fee_model, fund_nav, signal_bars, strategy_profile, payload.test_mode)
+    return await _run_engine_response(
+        config, fee_model, fund_nav, signal_bars, strategy_profile, payload.test_mode
+    )
 
 
-def _run_engine_response(
+async def _run_engine_response(
     config: BacktestConfig,
     fee_model: FundFeeModel,
     fund_nav: list[FundNavPoint],
@@ -154,7 +168,7 @@ def _run_engine_response(
     test_mode: bool = False,
 ) -> BacktestRunResponse:
     fund_nav, signal_bars = _align_by_date(fund_nav, signal_bars)
-    result = BacktestEngine(fee_model=fee_model).run(
+    result = await BacktestEngine(fee_model=fee_model).run(
         config=config,
         fund_nav=fund_nav,
         signal_bars=signal_bars,
@@ -217,7 +231,9 @@ async def _load_fund_nav(payload: BacktestRunRequest) -> list[FundNavPoint]:
                 status_code=502,
                 detail=f"Eastmoney fund NAV fetch failed: {exc}",
             ) from exc
-    raise HTTPException(status_code=422, detail=f"Unsupported fund NAV provider: {source.provider}")
+    raise HTTPException(
+        status_code=422, detail=f"Unsupported fund NAV provider: {source.provider}"
+    )
 
 
 async def _load_signal_bars(payload: BacktestRunRequest) -> list[SignalBar]:
@@ -242,7 +258,9 @@ async def _load_signal_bars(payload: BacktestRunRequest) -> list[SignalBar]:
                 status_code=502,
                 detail=f"westock-data fetch failed: {exc}",
             ) from exc
-    raise HTTPException(status_code=422, detail=f"Unsupported signal provider: {source.provider}")
+    raise HTTPException(
+        status_code=422, detail=f"Unsupported signal provider: {source.provider}"
+    )
 
 
 async def _load_etf_data(
@@ -284,10 +302,7 @@ async def _load_etf_data(
         )
 
     # close 价格作为 NAV
-    fund_nav = [
-        FundNavPoint(date=bar.date, nav=bar.close)
-        for bar in signal_bars
-    ]
+    fund_nav = [FundNavPoint(date=bar.date, nav=bar.close) for bar in signal_bars]
     return fund_nav, signal_bars
 
 

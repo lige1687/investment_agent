@@ -79,6 +79,35 @@ class BacktestConfig:
     current_correlated_growth_exposure_pct: float = 0.0
     account_drawdown_redline_pct: float = 10.0
     prosperity: ProsperityConfig = field(default_factory=ProsperityConfig)
+    # Regime-conditional profit-taking (Task 6, spec §11.2)
+    # Bull: trailing drawdown threshold (% from batch peak).  Looser than
+    # existing batch take-profit thresholds so profits run further in bull.
+    trailing_drawdown_pct: float = 10.0
+    # Bear: gain-ladder rungs (% batch return).  At each rung, sell one batch
+    # tier.  Do NOT wait for drawdown -- take profit directly in bear.
+    gain_ladder_thresholds: tuple[float, ...] = (20.0, 30.0)
+    # Task 7: Externalized batch allocation ratios
+    core_batch_ratio: float = 0.5
+    confirmation_batch_ratio: float = 0.3
+    high_position_batch_ratio: float = 0.2
+    # Task 7: Externalized batch take-profit thresholds (peak_pct, drawdown_pct)
+    trial_tp_peak_pct: float = 3.0
+    trial_tp_drawdown_pct: float = 3.0
+    high_position_tp_peak_pct: float = 5.0
+    high_position_tp_drawdown_pct: float = 4.0
+    confirmation_tp_peak_pct: float = 8.0
+    confirmation_tp_drawdown_pct: float = 5.0
+    core_tp_peak_pct: float = 15.0
+    core_tp_drawdown_pct: float = 6.0
+    # Task 7: Externalized core batch hard-cap protection thresholds
+    core_hard_cap_peak_pct: float = 40.0
+    core_hard_cap_drawdown_pct: float = 20.0
+    # Task 7: Externalized cost-line protection threshold
+    near_cost_line_pct: float = 1.5
+    # Task 7: Externalized market regime retention rates for dynamic profit-taking
+    regime_retention_rates: dict[str, float] = field(
+        default_factory=lambda: {"bull": 0.85, "neutral": 0.75, "bear": 0.50}
+    )
 
 
 @dataclass(frozen=True)

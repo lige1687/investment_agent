@@ -6,11 +6,10 @@ import logging
 from dataclasses import replace
 from typing import Any, Protocol
 
-import httpx
-
 from app.backtest.models import BacktestConfig
 from app.backtest.strategy_text import apply_strategy_text
 from app.config import settings
+from app.llm.registry import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,47 +19,23 @@ class StrategyCompilerClient(Protocol):
         ...
 
 
-class AnthropicStrategyCompilerClient:
-    """Small Anthropic-compatible JSON client for strategy compilation."""
+class RegistryStrategyCompilerClient:
+    """Uses the LLM registry to compile strategies (via get_llm_client)."""
 
-    def __init__(self):
-        pass
-
-    def _headers(self) -> dict[str, str] | None:
-        # ark and other Bearer-token proxies authenticate via Authorization,
-        # not x-api-key. Prefer auth_token when set; fall back to api_key for
-        # Anthropic-native (x-api-key) providers.
-        if settings.anthropic_auth_token:
-            return {
-                "authorization": f"Bearer {settings.anthropic_auth_token}",
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-        if settings.anthropic_api_key:
-            return {
-                "x-api-key": settings.anthropic_api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-        return None
+    def __init__(self, role: str = "backtest_compiler"):
+        self.role = role
 
     async def complete_json(self, prompt: str) -> dict[str, Any]:
-        headers = self._headers()
-        if headers is None:
-            raise RuntimeError("AI compiler client is not configured")
-        base_url = settings.anthropic_base_url.rstrip("/") if settings.anthropic_base_url else "https://api.anthropic.com"
-        payload = {
-            "model": settings.anthropic_model,
-            # Reasoning models spend part of this budget on a thinking block.
-            "max_tokens": 8192,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        async with httpx.AsyncClient(timeout=60, headers=headers) as client:
-            response = await client.post(f"{base_url}/v1/messages", json=payload)
-            response.raise_for_status()
-            data = response.json()
-        text = _extract_model_text(data)
+        client = get_llm_client(self.role)
+
+        # Call chat with the prompt; expect structured JSON response
+        response = await client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=8192,
+        )
+
+        text = response.get("text", "")
         return _parse_json_object(text)
 
 
@@ -68,7 +43,7 @@ class StrategyCompilerAgent:
     """Uses AI to compile a user's full trading system into strategy DSL."""
 
     def __init__(self, client: StrategyCompilerClient | None = None):
-        self.client = client or AnthropicStrategyCompilerClient()
+        self.client = client or RegistryStrategyCompilerClient()
 
     async def compile(self, strategy_text: str) -> dict[str, Any]:
         return await self.client.complete_json(_build_compile_prompt(strategy_text))
@@ -224,30 +199,14 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
 
 def _extract_model_text(data: dict[str, Any]) -> str:
-    content = data.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-        if parts:
-            return "\n".join(parts)
-
-    choices = data.get("choices")
-    if isinstance(choices, list) and choices:
-        first = choices[0]
-        if isinstance(first, dict):
-            message = first.get("message")
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                return message["content"]
-            if isinstance(first.get("text"), str):
-                return first["text"]
-
+    """Extract text from registry chat response."""
+    # Registry's chat method returns {"text": "...", ...}
+    if isinstance(data, dict):
+        text = data.get("text")
+        if isinstance(text, str):
+            return text
     return ""
+
 
 
 def _dict(value: Any) -> dict[str, Any]:
