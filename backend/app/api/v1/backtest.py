@@ -15,6 +15,7 @@ from app.backtest.models import (
     ProsperityConfig,
     SignalBar,
 )
+from app.backtest.observation.regime import RegimeCache, SectorRegimeProvider
 from app.backtest.presets import (
     BacktestPreset,
     get_backtest_preset,
@@ -168,11 +169,17 @@ async def _run_engine_response(
     test_mode: bool = False,
 ) -> BacktestRunResponse:
     fund_nav, signal_bars = _align_by_date(fund_nav, signal_bars)
+    # Production must drive regime-conditional sizing from real market state.
+    # Without a provider the engine defaults every day to "neutral", which
+    # downgrades strong_buy from the 20% target to 6%.  neutral remains only
+    # the per-day missing-data fallback inside the provider.
+    regime_provider = SectorRegimeProvider(cache=RegimeCache())
     result = await BacktestEngine(fee_model=fee_model).run(
         config=config,
         fund_nav=fund_nav,
         signal_bars=signal_bars,
         test_mode=test_mode,
+        regime_provider=regime_provider,
     )
     return BacktestRunResponse(
         config=asdict(result.config),
