@@ -93,3 +93,18 @@ def test_registry_detects_skill_changes_after_session_snapshot(tmp_path):
     with pytest.raises(SkillChangedError):
         registry.load("batch-trading-router")
 
+
+def test_new_hithink_skills_are_loadable(tmp_path):
+    from app.config import settings
+    from app.trading_room.skill_registry import TradingSkillRegistry
+
+    registry = TradingSkillRegistry(
+        trading_root=settings.trading_skill_root,
+        market_root=settings.market_skill_root,
+    )
+    for name in ("hithink-sector-selector", "hithink-fund-selector", "sector-rotation-analysis"):
+        bundle = registry.load(name)
+        assert bundle.name == name
+        assert bundle.sha256
+        assert bundle.content.strip()
+

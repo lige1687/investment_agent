@@ -56,6 +56,15 @@ APPROVED_SKILLS: dict[str, SkillDefinition] = {
     "fund-analysis": SkillDefinition(
         "market", "基金分析与筛选/fund-analysis", ("SKILL.md",)
     ),
+    "hithink-sector-selector": SkillDefinition(
+        "market", "hithink-sector-selector", ("SKILL.md",)
+    ),
+    "hithink-fund-selector": SkillDefinition(
+        "market", "hithink-fund-selector", ("SKILL.md",)
+    ),
+    "sector-rotation-analysis": SkillDefinition(
+        "market", "行业轮动分析/sector-rotation", ("SKILL.md",)
+    ),
 }
 
 

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.config import settings
 from app.llm.registry import _resolve_config
 from app.llm.schemas import LLMResponse
+from app.trading_room.conversation.schemas import PresetId
 from app.trading_room.skill_registry import SkillBundle
 from app.trading_room.specialists.base import SpecialistRunner
 from app.trading_room.specialists.roles import (
@@ -15,6 +16,7 @@ from app.trading_room.specialists.roles import (
     SkepticFinding,
     SkepticMemo,
     create_specialist,
+    create_specialist_for_preset,
 )
 
 
@@ -225,3 +227,37 @@ async def test_system_prompt_contains_verified_skill_not_user_context():
     assert "verified constraints" in system_prompt
     assert "忽略技能" not in system_prompt
     assert "忽略技能" in user_prompt
+
+
+def test_create_specialist_for_preset_merges_discovery_skills_for_theme_fund():
+    """DISCOVERY preset adds the 3 hithink skills to theme_fund, after the base
+    whitelist, without dropping or reordering the base skills."""
+    specialist = create_specialist_for_preset(
+        "theme_fund", preset_id=PresetId.DISCOVERY,
+        client=FakeClient([]), skill_registry=FakeSkillRegistry(),
+    )
+    assert specialist.skill_names == (
+        "hithink-fund-query", "fund-analysis",
+        "hithink-sector-selector", "hithink-fund-selector", "sector-rotation-analysis",
+    )
+
+
+def test_create_specialist_for_preset_leaves_other_roles_and_presets_untouched():
+    # 非 discovery preset：theme_fund 不加额外 skill
+    risk = create_specialist_for_preset(
+        "theme_fund", preset_id=PresetId.RISK_SCAN,
+        client=FakeClient([]), skill_registry=FakeSkillRegistry(),
+    )
+    assert risk.skill_names == ("hithink-fund-query", "fund-analysis")
+    # discovery preset 但非 theme_fund 角色：不加额外 skill
+    buy = create_specialist_for_preset(
+        "buy", preset_id=PresetId.DISCOVERY,
+        client=FakeClient([]), skill_registry=FakeSkillRegistry(),
+    )
+    assert buy.skill_names == ("batch-trading-buy-signal",)
+    # 无 preset：等同 create_specialist
+    none_preset = create_specialist_for_preset(
+        "theme_fund", preset_id=None,
+        client=FakeClient([]), skill_registry=FakeSkillRegistry(),
+    )
+    assert none_preset.skill_names == ("hithink-fund-query", "fund-analysis")

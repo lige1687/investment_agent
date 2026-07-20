@@ -1,10 +1,14 @@
 """Yangjibao REST API endpoints."""
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.services.portfolio_valuation_hook import record_synced_valuation
 from app.services.yangjibao_service import YangjibaoService
 
 router = APIRouter(prefix="/yangjibao", tags=["Yangjibao"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/status")
@@ -41,9 +45,17 @@ async def sync_portfolio(db: AsyncSession = Depends(get_db)):
     """Manually trigger portfolio sync from Yangjibao.
 
     Fetches latest positions and transactions, stores in local DB.
+    On success, records an account-valuation snapshot so drawdown math
+    has trusted data to work with.
     """
     service = YangjibaoService(db)
-    return await service.sync_portfolio()
+    result = await service.sync_portfolio()
+    if result.get("success"):
+        try:
+            await record_synced_valuation(db)
+        except Exception:  # 快照失败不阻塞主流程
+            logger.exception("valuation snapshot failed")
+    return result
 
 
 @router.get("/portfolio")
